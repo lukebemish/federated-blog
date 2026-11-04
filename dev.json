@@ -1,0 +1,12 @@
+{
+    "port": 3000,
+    "username": "blog",
+    "host": "http://localhost:3000/",
+    "homepage": "http://localhost:4000/",
+    "icon": {
+        "type": "Image",
+        "mediaType": "image/webp",
+        "url": "http://localhost:4000/assets/img/profile.webp"
+    },
+    "name": "Luke Bemish — Blog"
+}
