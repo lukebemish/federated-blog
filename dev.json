@@ -3,6 +3,7 @@
     "username": "blog",
     "host": "http://localhost:3000/",
     "homepage": "http://localhost:4000/",
+    "posts": "http://localhost:4000/posts.json",
     "icon": {
         "type": "Image",
         "mediaType": "image/webp",

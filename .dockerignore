@@ -1,0 +1,4 @@
+target/
+.git/
+main.db
+dev.json
