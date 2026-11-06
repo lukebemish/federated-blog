@@ -1,8 +1,9 @@
 use std::{fmt::Debug, fs::File, io::Read, path::Path, str::FromStr, sync::Arc, time::Duration};
 
-use aws_lc_rs::{encoding::AsDer, rsa, signature::KeyPair};
+use aws_lc_rs::{digest::{SHA512, digest}, encoding::AsDer, rsa, signature::KeyPair};
 use axum::{Json, Router, extract::{Query, State}, http::{Method, StatusCode}, routing::get};
 use base64::{Engine, engine::general_purpose::STANDARD};
+use chrono::Utc;
 use clap::Parser;
 use log::{error, info};
 use serde::{Deserialize, Serialize};
@@ -97,16 +98,15 @@ fn get_self_alias(state: &AppState<'_>) -> Result<Url, url::ParseError> {
     state.config.host.url.join(&format!("@{}", state.config.username))
 }
 
-async fn actor_handler(State(state): State<Arc<AppState<'_>>>) -> Result<Json<ActPubActor>, StatusCode> {
-    let self_alias = get_self_alias(&state).map_err(log_and_fail)?;
+fn get_actor(state: &AppState<'_>) -> Result<ActPubActor, Box<dyn std::error::Error + Send + Sync>> {
+    let self_alias = get_self_alias(&state)?;
     
     let mut self_alias_with_slash = self_alias.clone();
     self_alias_with_slash.path_segments_mut().map_err(|_| {
-        error!("Could not modify URL");
-        StatusCode::INTERNAL_SERVER_ERROR
+        "Could not modify URL"
     })?.pop_if_empty().push("");
 
-    Ok(Json(ActPubActor {
+    Ok(ActPubActor {
         context: "https://www.w3.org/ns/activitystreams",
         id: self_alias.to_string(),
         actor_type: "Persion",
@@ -123,12 +123,20 @@ async fn actor_handler(State(state): State<Arc<AppState<'_>>>) -> Result<Json<Ac
             owner: self_alias.to_string(),
             public_key_pem: format!(
                 "-----BEGIN PUBLIC KEY-----\n{}\n-----END PUBLIC KEY-----",
-                STANDARD.encode(state.keypair.public_key().as_der().map_err(log_and_fail)?.as_ref())
+                STANDARD.encode(state.keypair.public_key().as_der()?.as_ref())
             )
         },
         manually_approves_followers: false,
-        outbox: self_alias_with_slash.join("outbox").map_err(log_and_fail)?
-    }))
+        outbox: self_alias_with_slash.join("outbox")?
+    })
+}
+
+async fn actor_handler(State(state): State<Arc<AppState<'_>>>) -> Result<Json<ActPubActor>, StatusCode> {
+    let actor: Result<ActPubActor, Box<dyn std::error::Error + Send + Sync>> = get_actor(&state);
+    Ok(Json(actor.map_err(|e| {
+        let e_d: Box<dyn std::error::Error> = e;
+        e_d
+    }).map_err(log_and_fail)?))
 }
 
 #[derive(Serialize, Debug)]
@@ -311,8 +319,9 @@ fn read_config_from_file<P: AsRef<Path>>(path: P) -> Result<Config, tokio::io::E
     Ok(config)
 }
 
-fn log_and_fail(e: impl std::error::Error) -> StatusCode {
-    error!("{e:?}");
+fn log_and_fail<E: Into<Box<dyn std::error::Error>>>(e: E) -> StatusCode {
+    let e_d: Box<dyn Debug> = e.into();
+    error!("{e_d:?}");
     StatusCode::INTERNAL_SERVER_ERROR
 }
 
@@ -354,10 +363,65 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let config = Box::leak(Box::new(read_config_from_file(args.config)?));
 
+    let maybe_key = sqlx::query("SELECT value FROM keys")
+        .fetch_optional(&conn)
+        .await?;
+    let private_key = match maybe_key {
+        Some(row) => {
+            let s: &[u8] = row.get("value");
+            rsa::KeyPair::from_pkcs8(s)?
+        },
+        None => {
+            let key = rsa::KeyPair::generate(aws_lc_rs::rsa::KeySize::Rsa4096)?;
+            sqlx::query("INSERT INTO keys (value) VALUES (?)")
+                .bind(key.as_der()?.as_ref())
+                .execute(&conn)
+                .await?;
+            key
+        }
+    };
+
     let state = Arc::new(AppState {
         config: config,
-        keypair: rsa::KeyPair::generate(aws_lc_rs::rsa::KeySize::Rsa4096)?
+        keypair: private_key
     });
+
+    let actor_value = serde_json::to_value(get_actor(&state)?)?;
+    let actor_content = serde_json::to_string(&actor_value)?;
+    let hash_digest = digest(&SHA512, &actor_content.into_bytes());
+    let hash = hash_digest.as_ref();
+    let has_changed = match sqlx::query("SELECT (hash) FROM actorstate")
+        .fetch_optional(&conn).await? {
+            None => true,
+            Some(old_hash) => {
+                if old_hash.get::<&[u8], &str>("hash") == hash {
+                    false
+                } else {
+                    sqlx::query("DELETE FROM actorstate").execute(&conn).await?;
+                    true
+                }
+            }
+        };
+    if has_changed {
+        let self_alias = get_self_alias(&state)?;
+        sqlx::query("INSERT INTO actorstate (hash) VALUES (?)")
+            .bind(hash)
+            .execute(&conn).await?;
+        let now = Utc::now();
+        let activity = indexer::ActPubActivity {
+            activity_type: "Update",
+            id: self_alias.to_string(),
+            actor: self_alias.to_owned(),
+            published: now.to_rfc3339(),
+            object: actor_value
+        };
+        sqlx::query("INSERT INTO outbox (published, value) VALUES (?, ?)")
+            .bind(now.timestamp_millis())
+            .bind(serde_json::to_string(&activity)?)
+            .execute(&conn)
+            .await?;
+        info!("Indexed updates to actor state");
+    }
 
     let state_clone = state.clone();
     tokio::spawn(async move {

@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS keys (
+    value BLOB PRIMARY KEY
+);
+
+CREATE TABLE IF NOT EXISTS actorstate (
+    hash BLOB PRIMARY KEY
+);

@@ -14,16 +14,19 @@ struct Posts {
 }
 
 #[derive(Serialize, Debug)]
-struct ActPubActivity {
+pub struct ActPubActivity {
     #[serde(rename = "type")]
-    activity_type: & 'static str,
-    id: String,
-    actor: Url,
-    published: String,
-    object: Value
+    pub activity_type: & 'static str,
+    pub id: String,
+    pub actor: Url,
+    pub published: String,
+    pub object: Value
 }
 
 pub async fn run_index(state: &AppState<'_>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    //TODO: Need to implement update checking for actor -- name, images, other configured stuff, their referenced URLs, and keys
+    // Which means storing keys in the database (gotta do that, lol)
+
     let self_alias: Url = get_self_alias(state)?;
     let posts: Posts = reqwest::get(state.config.posts.as_str())
         .await?
