@@ -8,7 +8,7 @@ use clap::Parser;
 use log::{error, info};
 use reqwest::header;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use sqlx::{Pool, Row, Sqlite, sqlite::{SqliteConnectOptions, SqlitePoolOptions}};
 use tokio::{sync::OnceCell, time::interval};
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -113,6 +113,19 @@ async fn webfinger_handler(State(state): State<Arc<AppState<'_>>>, Query(params)
     Err(StatusCode::NOT_FOUND)
 }
 
+fn default_context() -> Value {
+    json!([
+        "https://www.w3.org/ns/activitystreams",
+        "https://w3id.org/security/v1",
+        {
+            "toot": "http://joinmastodon.org/ns#",
+            "manuallyApprovesFollowers": "as:manuallyApprovesFollowers",
+            "discoverable": "toot:discoverable",
+            "memorial": "toot:memorial"
+        }
+    ])
+}
+
 #[derive(Serialize, Debug)]
 struct ActPubPublicKey {
     id: String,
@@ -124,11 +137,11 @@ struct ActPubPublicKey {
 #[derive(Serialize, Debug)]
 struct ActPubActor {
     #[serde(rename = "@context")]
-    context: & 'static str,
+    context: Value,
     id: String,
-    webfinger: String,
     #[serde(rename = "type")]
     actor_type: & 'static str,
+    webfinger: String,
     #[serde(rename = "preferredUsername")]
     preferred_username: String,
     name: String,
@@ -162,10 +175,10 @@ fn get_actor(state: &AppState<'_>) -> Result<ActPubActor, Box<dyn std::error::Er
     })?.pop_if_empty().push("");
 
     Ok(ActPubActor {
-        context: "https://www.w3.org/ns/activitystreams",
+        context: default_context(),
         id: self_alias.to_string(),
         webfinger: format!("{}@{}", state.config.username, state.config.host.host.to_string()),
-        actor_type: "Persion",
+        actor_type: "Person",
         preferred_username: state.config.username.clone(),
         name: state.config.name.clone(),
         summary: None,
@@ -199,7 +212,7 @@ async fn actor_handler(State(state): State<Arc<AppState<'_>>>) -> Result<Activit
 #[derive(Serialize, Debug)]
 struct OrderedCollection {
     #[serde(rename = "@context")]
-    context: & 'static str,
+    context: Value,
     id: Url,
     #[serde(rename = "type")]
     collection_type: & 'static str,
@@ -212,7 +225,7 @@ struct OrderedCollection {
 #[derive(Serialize, Debug)]
 struct OrderedCollectionPage {
     #[serde(rename = "@context")]
-    context: & 'static str,
+    context: Value,
     id: Url,
     #[serde(rename = "type")]
     collection_type: & 'static str,
@@ -263,7 +276,7 @@ async fn outbox_handler(State(state): State<Arc<AppState<'_>>>, Query(params): Q
             last_page.set_query(Some(&format!("page={}", pages)));
 
             Ok(ActivityJson(serde_json::to_value(OrderedCollection {
-                context: "https://www.w3.org/ns/activitystreams",
+                context: default_context(),
                 id: outbox_url,
                 collection_type: "OrderedCollection",
                 total_items: total_count,
@@ -293,7 +306,7 @@ async fn outbox_handler(State(state): State<Arc<AppState<'_>>>, Query(params): Q
             prev_page.set_query(Some(&format!("page={}", page_num-1)));
 
             Ok(ActivityJson(serde_json::to_value(OrderedCollectionPage {
-                context: "https://www.w3.org/ns/activitystreams",
+                context: default_context(),
                 id: this_page,
                 collection_type: "OrderedCollectionPage",
                 items: outbox_rows,
