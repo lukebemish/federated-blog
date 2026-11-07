@@ -1,7 +1,7 @@
 use std::{fmt::Debug, fs::File, io::Read, path::Path, str::FromStr, sync::Arc, time::Duration};
 
 use aws_lc_rs::{digest::{SHA512, digest}, encoding::AsDer, rsa, signature::KeyPair};
-use axum::{Json, Router, extract::{Query, State}, http::{Method, StatusCode}, routing::get};
+use axum::{Json, Router, extract::{Query, State}, http::{Method, StatusCode}, routing::{get, post}};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use chrono::Utc;
 use clap::Parser;
@@ -14,6 +14,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use url::{Host, Url};
 
 mod indexer;
+mod inbox;
 
 #[derive(Serialize, Debug)]
 struct WebfingerLink {
@@ -79,6 +80,7 @@ struct ActPubActor {
     #[serde(rename = "preferredUsername")]
     preferred_username: String,
     name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     summary: Option<String>,
     url: Url,
     discoverable: bool,
@@ -91,7 +93,8 @@ struct ActPubActor {
     public_key: ActPubPublicKey,
     #[serde(rename = "manuallyApprovesFollowers")]
     manually_approves_followers: bool,
-    outbox: Url
+    outbox: Url,
+    inbox: Url
 }
 
 fn get_self_alias(state: &AppState<'_>) -> Result<Url, url::ParseError> {
@@ -127,7 +130,8 @@ fn get_actor(state: &AppState<'_>) -> Result<ActPubActor, Box<dyn std::error::Er
             )
         },
         manually_approves_followers: false,
-        outbox: self_alias_with_slash.join("outbox")?
+        outbox: self_alias_with_slash.join("outbox")?,
+        inbox: self_alias_with_slash.join("inbox")?
     })
 }
 
@@ -445,6 +449,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .route("/.well-known/webfinger", get(webfinger_handler))
         .route(&format!("/@{}", state.config.username), get(actor_handler))
         .route(&format!("/@{}/outbox", state.config.username), get(outbox_handler))
+        .route(&format!("/@{}/inbox", state.config.username), post(inbox::inbox_post))
         .layer(cors_layer)
         .with_state(state);
  
