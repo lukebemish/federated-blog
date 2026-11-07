@@ -1,7 +1,7 @@
 use std::{fmt::Debug, fs::File, io::Read, path::Path, str::FromStr, sync::Arc, time::Duration};
 
 use aws_lc_rs::{digest::{SHA512, digest}, encoding::AsDer, rsa, signature::KeyPair};
-use axum::{Router, body::Body, extract::{Query, State}, http::{Method, StatusCode}, response::{IntoResponse, Response}, routing::{get, post}};
+use axum::{Router, body::Body, extract::{Query, State}, http::{HeaderMap, Method, StatusCode}, response::{IntoResponse, Redirect, Response}, routing::{get, post}};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use chrono::Utc;
 use clap::Parser;
@@ -32,9 +32,11 @@ macro_rules! impl_into_response {
                 match serde_json::to_string(&self.held_value()) {
                     Ok(json) => Response::builder()
                         .status(StatusCode::OK)
-                        .header(header::CONTENT_TYPE, self.content_type())
+                        .header(header::CONTENT_TYPE, $name::<T>::content_type())
                         .body(Body::from(json))
-                        .unwrap(),
+                        .unwrap_or_else(|e| {
+                            log_and_fail(e).into_response()
+                        }),
                     Err(_) => (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "Serialization failed",
@@ -52,19 +54,19 @@ struct ActivityJson<T>(T);
 impl_into_response!(ActivityJson);
 impl <T: Serialize> JsonLike<T> for ActivityJson<T> {
     fn held_value(&self) -> &T { &self.0 }
-    fn content_type(&self) -> &str { "application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"" }
+    fn content_type() -> & 'static str { "application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"" }
 }
 
 struct JsonRD<T>(T);
 impl_into_response!(JsonRD);
 impl <T: Serialize> JsonLike<T> for JsonRD<T> {
     fn held_value(&self) -> &T { &self.0 }
-    fn content_type(&self) -> &str { "application/jrd+json" }
+    fn content_type() -> & 'static  str { "application/jrd+json" }
 }
 
 trait JsonLike<T: Serialize>: IntoResponse {
     fn held_value(&self) -> &T;
-    fn content_type(&self) -> &str;
+    fn content_type() -> & 'static str;
 }
 
 #[derive(Serialize, Debug)]
@@ -117,11 +119,13 @@ fn default_context() -> Value {
     json!([
         "https://www.w3.org/ns/activitystreams",
         "https://w3id.org/security/v1",
+        "https://purl.archive.org/socialweb/webfinger",
         {
             "toot": "http://joinmastodon.org/ns#",
             "manuallyApprovesFollowers": "as:manuallyApprovesFollowers",
             "discoverable": "toot:discoverable",
-            "memorial": "toot:memorial"
+            "memorial": "toot:memorial",
+            "Hashtag": "as:Hashtag"
         }
     ])
 }
@@ -166,13 +170,18 @@ fn get_self_alias(state: &AppState<'_>) -> Result<Url, url::ParseError> {
     state.config.host.url.join(&format!("@{}", state.config.username))
 }
 
+fn with_slash(url: &Url) -> Result<Url, String> {
+    let mut with_slash = url.clone();
+    with_slash.path_segments_mut().map_err(|_| {
+        "Could not modify URL"
+    })?.pop_if_empty().push("");
+    Ok(with_slash)
+}
+
 fn get_actor(state: &AppState<'_>) -> Result<ActPubActor, Box<dyn std::error::Error + Send + Sync>> {
     let self_alias = get_self_alias(&state)?;
     
-    let mut self_alias_with_slash = self_alias.clone();
-    self_alias_with_slash.path_segments_mut().map_err(|_| {
-        "Could not modify URL"
-    })?.pop_if_empty().push("");
+    let self_alias_with_slash = with_slash(&self_alias)?;
 
     Ok(ActPubActor {
         context: default_context(),
@@ -201,12 +210,22 @@ fn get_actor(state: &AppState<'_>) -> Result<ActPubActor, Box<dyn std::error::Er
     })
 }
 
-async fn actor_handler(State(state): State<Arc<AppState<'_>>>) -> Result<ActivityJson<ActPubActor>, StatusCode> {
-    let actor: Result<ActPubActor, Box<dyn std::error::Error + Send + Sync>> = get_actor(&state);
-    Ok(ActivityJson(actor.map_err(|e| {
-        let e_d: Box<dyn std::error::Error> = e;
-        e_d
-    }).map_err(log_and_fail)?))
+async fn actor_handler(State(state): State<Arc<AppState<'_>>>, headers: HeaderMap) -> Response {
+    if let Some(accept) = headers.get(header::ACCEPT) {
+        if let Ok(accept_str) = accept.to_str() {
+            if accept_str.contains("text/html") {
+                return Redirect::to(state.config.homepage.as_str()).into_response();
+            }
+        }
+    }
+    let make_actor = async || {
+        let actor: Result<ActPubActor, Box<dyn std::error::Error + Send + Sync>> = get_actor(&state);
+        Ok::<ActivityJson<ActPubActor>, StatusCode>(ActivityJson(actor.map_err(|e| {
+            let e_d: Box<dyn std::error::Error> = e;
+            e_d
+        }).map_err(log_and_fail)?))
+    };
+    make_actor().await.into_response()
 }
 
 #[derive(Serialize, Debug)]
@@ -516,6 +535,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .route(&format!("/@{}", state.config.username), get(actor_handler))
         .route(&format!("/@{}/outbox", state.config.username), get(outbox_handler))
         .route(&format!("/@{}/inbox", state.config.username), post(inbox::inbox_post))
+        .route(&format!("/@{}/objects/{{*path}}", state.config.username), get(indexer::get_post))
         .layer(cors_layer)
         .with_state(state);
  
