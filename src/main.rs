@@ -1,11 +1,12 @@
 use std::{fmt::Debug, fs::File, io::Read, path::Path, str::FromStr, sync::Arc, time::Duration};
 
 use aws_lc_rs::{digest::{SHA512, digest}, encoding::AsDer, rsa, signature::KeyPair};
-use axum::{Json, Router, extract::{Query, State}, http::{Method, StatusCode}, routing::{get, post}};
+use axum::{Json, Router, body::Body, extract::{Query, State}, http::{Method, StatusCode}, response::{IntoResponse, Response}, routing::{get, post}};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use chrono::Utc;
 use clap::Parser;
 use log::{error, info};
+use reqwest::header;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{Pool, Row, Sqlite, sqlite::{SqliteConnectOptions, SqlitePoolOptions}};
@@ -15,6 +16,24 @@ use url::{Host, Url};
 
 mod indexer;
 mod inbox;
+
+struct ActivityJson<T>(T);
+
+impl <T: Serialize> IntoResponse for ActivityJson<T> {
+    fn into_response(self) -> Response {
+        match serde_json::to_string(&self.0) {
+            Ok(json) => Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"")
+                .body(Body::from(json))
+                .unwrap(),
+            Err(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Serialization failed",
+            ).into_response(),
+        }
+    }
+}
 
 #[derive(Serialize, Debug)]
 struct WebfingerLink {
@@ -135,9 +154,9 @@ fn get_actor(state: &AppState<'_>) -> Result<ActPubActor, Box<dyn std::error::Er
     })
 }
 
-async fn actor_handler(State(state): State<Arc<AppState<'_>>>) -> Result<Json<ActPubActor>, StatusCode> {
+async fn actor_handler(State(state): State<Arc<AppState<'_>>>) -> Result<ActivityJson<ActPubActor>, StatusCode> {
     let actor: Result<ActPubActor, Box<dyn std::error::Error + Send + Sync>> = get_actor(&state);
-    Ok(Json(actor.map_err(|e| {
+    Ok(ActivityJson(actor.map_err(|e| {
         let e_d: Box<dyn std::error::Error> = e;
         e_d
     }).map_err(log_and_fail)?))
@@ -178,7 +197,7 @@ struct OrderedCollectionParams {
     page: Option<u32>
 }
 
-async fn outbox_handler(State(state): State<Arc<AppState<'_>>>, Query(params): Query<OrderedCollectionParams>) -> Result<Json<Value>, StatusCode> {
+async fn outbox_handler(State(state): State<Arc<AppState<'_>>>, Query(params): Query<OrderedCollectionParams>) -> Result<ActivityJson<Value>, StatusCode> {
     let self_alias = get_self_alias(&state).map_err(log_and_fail)?;
     
     let mut self_alias_with_slash = self_alias.clone();
@@ -209,7 +228,7 @@ async fn outbox_handler(State(state): State<Arc<AppState<'_>>>, Query(params): Q
             first_page.set_query(Some(&format!("page=1")));
             last_page.set_query(Some(&format!("page={}", pages)));
 
-            Ok(Json(serde_json::to_value(OrderedCollection {
+            Ok(ActivityJson(serde_json::to_value(OrderedCollection {
                 context: "https://www.w3.org/ns/activitystreams",
                 id: outbox_url,
                 collection_type: "OrderedCollection",
@@ -239,7 +258,7 @@ async fn outbox_handler(State(state): State<Arc<AppState<'_>>>, Query(params): Q
             next_page.set_query(Some(&format!("page={}", page_num+1)));
             prev_page.set_query(Some(&format!("page={}", page_num-1)));
 
-            Ok(Json(serde_json::to_value(OrderedCollectionPage {
+            Ok(ActivityJson(serde_json::to_value(OrderedCollectionPage {
                 context: "https://www.w3.org/ns/activitystreams",
                 id: this_page,
                 collection_type: "OrderedCollectionPage",
