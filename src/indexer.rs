@@ -35,7 +35,7 @@ pub async fn get_post(Path(path): Path<String>, headers: HeaderMap) -> Result<Re
     let conn = db_conn().await;
     if let Some(accept) = headers.get(header::ACCEPT) {
         if let Ok(accept_str) = accept.to_str() {
-            if accept_str.contains("text/html") {
+            if accept_str.contains("text/html") && !accept_str.contains("application/activity+json") && !accept_str.contains("application/ld+json") {
                 let query: Option<String> = sqlx::query_scalar("SELECT human_url FROM posts WHERE id = ?")
                     .bind(path.as_str())
                     .fetch_optional(&conn)

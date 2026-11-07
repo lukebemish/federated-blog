@@ -213,7 +213,7 @@ fn get_actor(state: &AppState<'_>) -> Result<ActPubActor, Box<dyn std::error::Er
 async fn actor_handler(State(state): State<Arc<AppState<'_>>>, headers: HeaderMap) -> Response {
     if let Some(accept) = headers.get(header::ACCEPT) {
         if let Ok(accept_str) = accept.to_str() {
-            if accept_str.contains("text/html") {
+            if accept_str.contains("text/html") && !accept_str.contains("application/activity+json") && !accept_str.contains("application/ld+json") {
                 return Redirect::to(state.config.homepage.as_str()).into_response();
             }
         }
