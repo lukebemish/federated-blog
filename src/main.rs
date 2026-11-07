@@ -1,7 +1,7 @@
 use std::{fmt::Debug, fs::File, io::Read, path::Path, str::FromStr, sync::Arc, time::Duration};
 
 use aws_lc_rs::{digest::{SHA512, digest}, encoding::AsDer, rsa, signature::KeyPair};
-use axum::{Json, Router, body::Body, extract::{Query, State}, http::{Method, StatusCode}, response::{IntoResponse, Response}, routing::{get, post}};
+use axum::{Router, body::Body, extract::{Query, State}, http::{Method, StatusCode}, response::{IntoResponse, Response}, routing::{get, post}};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use chrono::Utc;
 use clap::Parser;
@@ -14,25 +14,57 @@ use tokio::{sync::OnceCell, time::interval};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use url::{Host, Url};
 
+macro_rules! impl_into_response {
+    ($name:ident) => {
+        const _: () = {
+            #[allow(unused)]
+            fn assert_json_like<T: Serialize, U: JsonLike<T>>() {}
+
+            // RFC 2056
+            #[allow(unused)]
+            fn assert_all<T: Serialize>() {
+                assert_json_like::<T, $name<T>>();
+            }
+        };
+
+        impl <T: Serialize> IntoResponse for $name<T> {
+            fn into_response(self) -> Response {
+                match serde_json::to_string(&self.held_value()) {
+                    Ok(json) => Response::builder()
+                        .status(StatusCode::OK)
+                        .header(header::CONTENT_TYPE, self.content_type())
+                        .body(Body::from(json))
+                        .unwrap(),
+                    Err(_) => (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Serialization failed",
+                    ).into_response(),
+                }
+            }
+        }
+    };
+}
+
 mod indexer;
 mod inbox;
 
 struct ActivityJson<T>(T);
+impl_into_response!(ActivityJson);
+impl <T: Serialize> JsonLike<T> for ActivityJson<T> {
+    fn held_value(&self) -> &T { &self.0 }
+    fn content_type(&self) -> &str { "application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"" }
+}
 
-impl <T: Serialize> IntoResponse for ActivityJson<T> {
-    fn into_response(self) -> Response {
-        match serde_json::to_string(&self.0) {
-            Ok(json) => Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, "application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"")
-                .body(Body::from(json))
-                .unwrap(),
-            Err(_) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Serialization failed",
-            ).into_response(),
-        }
-    }
+struct JsonRD<T>(T);
+impl_into_response!(JsonRD);
+impl <T: Serialize> JsonLike<T> for JsonRD<T> {
+    fn held_value(&self) -> &T { &self.0 }
+    fn content_type(&self) -> &str { "application/jrd+json" }
+}
+
+trait JsonLike<T: Serialize>: IntoResponse {
+    fn held_value(&self) -> &T;
+    fn content_type(&self) -> &str;
 }
 
 #[derive(Serialize, Debug)]
@@ -55,10 +87,10 @@ struct WebfingerParams {
     resource: String
 }
 
-async fn webfinger_handler(State(state): State<Arc<AppState<'_>>>, Query(params): Query<WebfingerParams>) -> Result<Json<WebfingerResponse>, StatusCode> {
+async fn webfinger_handler(State(state): State<Arc<AppState<'_>>>, Query(params): Query<WebfingerParams>) -> Result<JsonRD<WebfingerResponse>, StatusCode> {
     if params.resource == format!("acct:{}@{}", state.config.username, state.config.host.host.to_string()) {
         let self_alias = get_self_alias(&state).map_err(log_and_fail)?;
-        return Ok(Json(WebfingerResponse {
+        return Ok(JsonRD(WebfingerResponse {
             subject: params.resource,
             aliases: vec![
                 self_alias.to_string(),
@@ -67,7 +99,7 @@ async fn webfinger_handler(State(state): State<Arc<AppState<'_>>>, Query(params)
             links: vec![
                 WebfingerLink {
                     rel: "self".to_owned(),
-                    link_type: "application/activity+json".to_owned(),
+                    link_type: "application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"".to_owned(),
                     href: self_alias.to_string()
                 },
                 WebfingerLink {
@@ -94,6 +126,7 @@ struct ActPubActor {
     #[serde(rename = "@context")]
     context: & 'static str,
     id: String,
+    webfinger: String,
     #[serde(rename = "type")]
     actor_type: & 'static str,
     #[serde(rename = "preferredUsername")]
@@ -131,6 +164,7 @@ fn get_actor(state: &AppState<'_>) -> Result<ActPubActor, Box<dyn std::error::Er
     Ok(ActPubActor {
         context: "https://www.w3.org/ns/activitystreams",
         id: self_alias.to_string(),
+        webfinger: format!("{}@{}", state.config.username, state.config.host.host.to_string()),
         actor_type: "Persion",
         preferred_username: state.config.username.clone(),
         name: state.config.name.clone(),
