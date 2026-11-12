@@ -46,8 +46,13 @@ impl Activity for Follow {
                 .bind(followed.ap_id.inner().as_str())
                 .bind(actor.ap_id.inner().as_str())
                 .execute(&data.database).await?;
+        } else {
+            return Err(Error::Simple(anyhow!(
+                format!("Could not follow: actor {} trying to follow target {}", actor.ap_id.inner(), followed.ap_id.inner()
+            ))));
         }
         Outbound::accept_follow(data, &followed.ap_id, self.clone()).await?;
+        log::info!("Accepted follow from {}", actor.ap_id.inner());
         Ok(())
     }
 }

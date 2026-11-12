@@ -180,6 +180,7 @@ async fn main() -> Result<(), Error> {
     let ap_config = FederationConfig::builder()
         .domain(&state.config.host.host.to_string())
         .app_data(state.clone())
+        .http_signature_compat(true) // For Mastodon
         .signed_fetch_actor(&local_user)
         .build()
         .await?;
