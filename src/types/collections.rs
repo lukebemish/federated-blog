@@ -2,7 +2,6 @@ use activitypub_federation::kinds::collection::OrderedCollectionType;
 use serde::Serialize;
 use url::Url;
 
-
 #[derive(Debug, Serialize)]
 #[serde(bound = "")]
 #[serde(rename_all = "camelCase")]

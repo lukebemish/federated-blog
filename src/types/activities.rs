@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use activitypub_federation::{activity_queue::queue_activity, config::Data, fetch::object_id::ObjectId, kinds::activity::{AcceptType, CreateType, FollowType, UpdateType}, traits::{Activity, Actor}};
+use activitypub_federation::{activity_queue::queue_activity, config::Data, fetch::object_id::ObjectId, kinds::activity::{AcceptType, CreateType, FollowType, UndoType, UpdateType}, traits::{Activity, Actor}};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -53,6 +53,54 @@ impl Activity for Follow {
         }
         Outbound::accept_follow(data, &followed.ap_id, self.clone()).await?;
         log::info!("Accepted follow from {}", actor.ap_id.inner());
+        Ok(())
+    }
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UndoFollow {
+    pub(crate) actor: ObjectId<DbUser>,
+    pub(crate) object: Follow,
+    #[serde(rename = "type")]
+    pub(crate) kind: UndoType,
+    pub(crate) id: Url,
+}
+
+#[async_trait]
+impl Activity for UndoFollow {
+    type DataType = Arc<AppState>;
+    type Error = Error;
+
+    fn id(&self) -> &Url {
+        &self.id
+    }
+
+    fn actor(&self) -> &Url {
+        self.actor.inner()
+    }
+    
+    async fn verify(&self,  _data: &Data<Self::DataType>) -> Result<(), Self::Error> {
+        if self.actor != self.object.actor {
+            return Err(Error::Simple(anyhow!("Un-follow requests must be made by the actor that initiated the follow!")));
+        }
+        Ok(())
+    }
+
+    async fn receive(self, data: &Data<Self::DataType>) -> Result<(), Self::Error> {
+        let actor = self.actor.dereference(data).await?;
+        let followed = self.object.object.dereference(data).await?;
+        if followed.local.is_some() && actor.local.is_none() {
+            sqlx::query("DELETE FROM followers WHERE followee = ? AND follower = ?")
+                .bind(followed.ap_id.inner().as_str())
+                .bind(actor.ap_id.inner().as_str())
+                .execute(&data.database).await?;
+        } else {
+            return Err(Error::Simple(anyhow!(
+                format!("Could not un-follow: actor {} trying to un-follow target {}", actor.ap_id.inner(), followed.ap_id.inner()
+            ))));
+        }
+        log::info!("Undid follow from {}", actor.ap_id.inner());
         Ok(())
     }
 }

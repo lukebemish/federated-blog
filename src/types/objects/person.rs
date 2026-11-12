@@ -1,4 +1,4 @@
-use crate::{AppState, Error, get_self_alias, types::{activities::Follow, utils::DummyContext}, with_slash};
+use crate::{AppState, Error, get_self_alias, types::{activities::{Follow, UndoFollow}, utils::DummyContext}, with_slash};
 use activitypub_federation::{
     config::Data, fetch::object_id::ObjectId, http_signatures::{Keypair, generate_actor_keypair}, kinds::actor::PersonType, protocol::{public_key::PublicKey, verification::verify_domains_match}, traits::{Activity, Actor, Object},
 };
@@ -36,6 +36,7 @@ pub(crate) struct LocalDbUser {
 #[enum_delegate::implement(Activity)]
 pub(crate) enum PersonAcceptedActivities {
     Follow(Follow),
+    UnFollow(UndoFollow)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
