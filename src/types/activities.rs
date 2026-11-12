@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use activitypub_federation::{activity_queue::queue_activity, config::Data, fetch::object_id::ObjectId, kinds::activity::{AcceptType, CreateType, FollowType, UndoType, UpdateType}, traits::{Activity, Actor}};
 use anyhow::anyhow;
@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::Row;
 use url::Url;
 
@@ -101,6 +102,41 @@ impl Activity for UndoFollow {
             ))));
         }
         log::info!("Undid follow from {}", actor.ap_id.inner());
+        Ok(())
+    }
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UnknownActivity {
+    pub(crate) actor: ObjectId<DbUser>,
+    #[serde(rename = "type")]
+    pub(crate) kind: String,
+    pub(crate) id: Url,
+    #[serde(flatten)]
+    pub(crate) extra: HashMap<String, Value>
+}
+
+#[async_trait]
+impl Activity for UnknownActivity {
+    type DataType = Arc<AppState>;
+    type Error = Error;
+
+    fn id(&self) -> &Url {
+        &self.id
+    }
+
+    fn actor(&self) -> &Url {
+        self.actor.inner()
+    }
+    
+    async fn verify(&self,  _data: &Data<Self::DataType>) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    async fn receive(self, data: &Data<Self::DataType>) -> Result<(), Self::Error> {
+        let actor = self.actor.dereference(data).await?;
+        log::info!("No-op for unknown activity {} from {}", serde_json::to_string(&self)?, actor.ap_id.inner());
         Ok(())
     }
 }
