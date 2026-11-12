@@ -7,7 +7,7 @@ use serde_json::Value;
 use sqlx::Row;
 use url::Url;
 
-use crate::{AppState, Error, get_self_alias, types::{objects::person::{DbUser, LocalEndpoint, get_local_endpoint}, utils::DummyContext}};
+use crate::{AppState, Error, get_self_alias, types::{activities::Outbound, objects::person::{DbUser, LocalEndpoint, get_local_endpoint}, utils::DummyContext}};
 
 #[derive(Debug, Clone)]
 pub(crate) struct DbLocalArticle {
@@ -22,7 +22,6 @@ pub(crate) struct DbLocalArticle {
 
 impl DbLocalArticle {
     pub(crate) async fn new_local(data: &Data<Arc<AppState>>, mut value: Value, ap_id: Url) -> Result<DbLocalArticle, Error> {
-        // TODO: rocess value
         match &mut value {
             Value::Object(map) => {
                 map.insert("to".to_owned(), Value::Array(vec![
@@ -36,11 +35,16 @@ impl DbLocalArticle {
         }
         let value = value; // no more mut
 
-        let existing = DbLocalArticle::read_from_id(ap_id, data).await?;
+        let existing = DbLocalArticle::read_from_id(ap_id.clone(), data).await?;
         match existing {
             None => {
                 let article = DbLocalArticle::from_json(serde_json::from_value(value)?, data).await?;
-                // TODO: emit activity
+                Outbound::create_article(
+                    data,
+                    &article.attributed_to,
+                    article.clone().into_json(data).await?
+                ).await?;
+                log::info!("Indexed creation of {ap_id}");
                 Ok(article)
             },
             Some(old) => {
@@ -48,6 +52,12 @@ impl DbLocalArticle {
                 let new_json: LocalArticle = serde_json::from_value(value)?;
                 if old_json != new_json {
                     let article = DbLocalArticle::from_json(new_json, data).await?;
+                    Outbound::modify_article(
+                        data,
+                        &article.attributed_to,
+                        article.clone().into_json(data).await?
+                    ).await?;
+                    log::info!("Indexed modification of {ap_id}");
                     Ok(article)
                 } else {
                     Ok(old)
@@ -70,7 +80,7 @@ pub(crate) struct LocalArticle {
     to: Vec<Url>,
     #[serde(default)]
     cc: Vec<Url>,
-    #[serde(skip_serializing, rename = "@context")]
+    #[serde(skip_serializing, default, rename = "@context")]
     _context: DummyContext,
     #[serde(flatten)]
     extra: HashMap<String, Value>

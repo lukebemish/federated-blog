@@ -32,3 +32,15 @@ CREATE TABLE IF NOT EXISTS blog_articles (
     extra TEXT NOT NULL,
     name TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS outbound_activities (
+    id_part TEXT PRIMARY KEY,
+    actor TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    published INTEGER NOT NULL,
+    object TEXT
+);
+
+CREATE INDEX outbound_activities_by_date ON outbound_activities(published);
+
+CREATE INDEX outbound_activities_by_actor ON outbound_activities(actor);

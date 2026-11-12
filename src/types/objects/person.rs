@@ -158,7 +158,7 @@ pub(crate) struct Person {
     #[serde(skip_serializing_if = "Option::is_none")]
     followers: Option<Url>,
     public_key: PublicKey,
-    #[serde(skip_serializing, rename = "@context")]
+    #[serde(skip_serializing, default, rename = "@context")]
     _context: DummyContext,
     #[serde(flatten)]
     extra: HashMap<String, Value>
@@ -291,5 +291,9 @@ impl Actor for DbUser {
 
     fn inbox(&self) -> Url {
         self.inbox.clone()
+    }
+
+    fn shared_inbox(&self) -> Option<Url> {
+        self.shared_inbox.clone()
     }
 }

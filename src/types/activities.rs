@@ -1,11 +1,15 @@
 use std::sync::Arc;
 
-use activitypub_federation::{config::Data, fetch::object_id::ObjectId, kinds::activity::FollowType, traits::Activity};
+use activitypub_federation::{activity_queue::queue_activity, config::Data, fetch::object_id::ObjectId, kinds::activity::{AcceptType, CreateType, FollowType, UpdateType}, traits::{Activity, Actor}};
+use anyhow::anyhow;
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use futures::future::join_all;
 use serde::{Deserialize, Serialize};
+use sqlx::Row;
 use url::Url;
 
-use crate::{AppState, Error, types::objects::person::DbUser};
+use crate::{AppState, Error, types::{activities::Outbound::{AcceptFollow, CreateArticle, ModifyArticle}, objects::{article::LocalArticle, person::DbUser}}};
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -43,6 +47,264 @@ impl Activity for Follow {
                 .bind(actor.ap_id.inner().as_str())
                 .execute(&data.database).await?;
         }
+        Outbound::accept_follow(data, &followed.ap_id, self.clone()).await?;
         Ok(())
     }
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase", untagged)]
+pub(crate) enum Outbound {
+    CreateArticle {
+        #[serde(rename = "type")]
+        kind: CreateType,
+        #[serde(skip_serializing)]
+        id_part: String,
+        id: Url,
+        actor: ObjectId<DbUser>,
+        published: DateTime<Utc>,
+        object: LocalArticle,
+    },
+    ModifyArticle {
+        #[serde(rename = "type")]
+        kind: UpdateType,
+        #[serde(skip_serializing)]
+        id_part: String,
+        id: Url,
+        actor: ObjectId<DbUser>,
+        published: DateTime<Utc>,
+        object: LocalArticle,
+    },
+    AcceptFollow {
+        #[serde(rename = "type")]
+        kind: AcceptType,
+        #[serde(skip_serializing)]
+        id_part: String,
+        id: Url,
+        actor: ObjectId<DbUser>,
+        published: DateTime<Utc>,
+        object: Follow,
+    },
+}
+
+#[async_trait]
+impl Activity for Outbound {
+    type DataType = Arc<AppState>;
+    type Error = Error;
+
+    fn id(&self) -> &Url {
+        match self {
+            CreateArticle { id, .. } => id,
+            ModifyArticle { id, .. } => id,
+            AcceptFollow { id, .. } => id,
+        }
+    }
+
+    fn actor(&self) -> &Url {
+        match self {
+            CreateArticle { actor, .. } => actor.inner(),
+            ModifyArticle { actor, .. } => actor.inner(),
+            AcceptFollow { actor, .. } => actor.inner(),
+        }
+    }
+    
+    async fn verify(&self,  _data: &Data<Self::DataType>) -> Result<(), Self::Error> {
+        Err(Error::Simple(anyhow!("Cannot receive outbound activities")))
+    }
+
+    async fn receive(self, _data: &Data<Self::DataType>) -> Result<(), Self::Error> {
+        Err(Error::Simple(anyhow!("Cannot receive outbound activities")))
+    }
+}
+
+impl Outbound {
+    fn actor_id(&self) -> &ObjectId<DbUser> {
+        match self {
+            CreateArticle { actor, .. } => actor,
+            ModifyArticle { actor, .. } => actor,
+            AcceptFollow { actor, .. } => actor,
+        }
+    }
+
+    pub(crate) async fn create_article(state: &Data<Arc<AppState>>, actor: &ObjectId<DbUser>, object: LocalArticle) -> Result<(), Error> {
+        let id_part = new_activity_id();
+        let id = get_activities_root(state)?.join(&id_part)?;
+        let activity = CreateArticle {
+            kind: CreateType::Create,
+            id_part,
+            id,
+            actor: actor.clone(),
+            published: Utc::now(),
+            object
+        };
+        submit_outbound(state, activity).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn modify_article(state: &Data<Arc<AppState>>, actor: &ObjectId<DbUser>, object: LocalArticle) -> Result<(), Error> {
+        let id_part = new_activity_id();
+        let id = get_activities_root(state)?.join(&id_part)?;
+        let activity = ModifyArticle {
+            kind: UpdateType::Update,
+            id_part,
+            id,
+            actor: actor.clone(),
+            published: Utc::now(),
+            object
+        };
+        submit_outbound(state, activity).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn accept_follow(state: &Data<Arc<AppState>>, actor: &ObjectId<DbUser>, follow: Follow) -> Result<(), Error> {
+        let id_part = new_activity_id();
+        let id = get_activities_root(state)?.join(&id_part)?;
+        let activity = AcceptFollow {
+            kind: AcceptType::Accept,
+            id_part,
+            id,
+            actor: actor.clone(),
+            published: Utc::now(),
+            object: follow
+        };
+        submit_outbound(state, activity).await?;
+        Ok(())
+    }
+}
+
+pub(crate) fn get_activities_root(state: &AppState) -> Result<Url, Error> {
+    Ok(state.config.host.url.join("activities/")?)
+}
+
+pub(crate) fn new_activity_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+pub(crate) async fn submit_outbound(data: &Data<Arc<AppState>>, outbound: Outbound) -> Result<(), Error> {
+    match &outbound {
+        Outbound::ModifyArticle {
+            kind: _,
+            id_part,
+            actor,
+            object,
+            published,
+            id: _
+        } => sqlx::query("INSERT INTO outbound_activities (id_part, actor, kind, object, published) VALUES (?, ?, ?, ?, ?)")
+            .bind(id_part)
+            .bind(actor.inner().as_str())
+            .bind("Update")
+            .bind(serde_json::to_string(&object)?)
+            .bind(published.timestamp_millis()),
+        Outbound::CreateArticle {
+            kind: _,
+            id_part,
+            actor,
+            object,
+            published,
+            id: _
+        } => sqlx::query("INSERT INTO outbound_activities (id_part, actor, kind, object, published) VALUES (?, ?, ?, ?, ?)")
+            .bind(id_part)
+            .bind(actor.inner().as_str())
+            .bind("Create")
+            .bind(serde_json::to_string(&object)?)
+            .bind(published.timestamp_millis()),
+        Outbound::AcceptFollow {
+            kind: _,
+            id_part,
+            actor,
+            object,
+            published,
+            id: _
+        } => sqlx::query("INSERT INTO outbound_activities (id_part, actor, kind, object, published) VALUES (?, ?, ?, ?, ?)")
+            .bind(id_part)
+            .bind(actor.inner().as_str())
+            .bind("Accept(Follow)")
+            .bind(serde_json::to_string(&object)?)
+            .bind(published.timestamp_millis()),
+    }.execute(&data.database).await?;
+
+    let actors = match &outbound {
+        CreateArticle { .. } => get_followers(data, outbound.actor_id()).await?,
+        ModifyArticle { .. } => get_followers(data, outbound.actor_id()).await?,
+        AcceptFollow { object, .. } => vec![object.actor.clone()],
+    };
+    let inboxes = get_inboxes(data, actors).await?;
+
+    let actor = outbound.actor_id().dereference(&data).await?;
+
+    queue_activity(&outbound, &actor, inboxes, &data).await?;
+
+    Ok(())
+}
+
+async fn get_inboxes(data: &Data<Arc<AppState>>, actors: Vec<ObjectId<DbUser>>) -> Result<Vec<Url>, Error> {
+    join_all(actors.iter().map(|follower| async {
+        let actor = follower.dereference(data).await?;
+        Ok::<Url, Error>(actor.shared_inbox_or_inbox())
+    })).await.into_iter().collect::<Result<Vec<Url>, Error>>()
+}
+
+pub(crate) async fn get_followers(data: &Data<Arc<AppState>>, actor: &ObjectId<DbUser>) -> Result<Vec<ObjectId<DbUser>>, Error> {
+    let followers: Vec<String> = sqlx::query_scalar("SELECT follower FROM followers WHERE followee = ?")
+        .bind(actor.inner().as_str())
+        .fetch_all(&data.database)
+        .await?;
+    followers.iter().map(|follower| {
+        let id = Url::parse(follower)?;
+        Ok(ObjectId::<DbUser>::from(id))
+    }).collect()
+}
+
+pub(crate) async fn get_outbound(data: &Data<Arc<AppState>>, id_part: &str) -> Result<Option<Outbound>, Error> {
+    let row = sqlx::query("SELECT actor, kind, object, published FROM outbound_activities WHERE id_part = ?")
+        .bind(id_part)
+        .fetch_optional(&data.database)
+        .await?;
+    match row {
+        None => Ok(None),
+        Some(row) => {
+            let actor: ObjectId<DbUser> = Url::parse(row.get("actor"))?.into();
+            let kind: String = row.get("kind");
+            let object: Option<String> = row.get("object");
+            let full_url = get_activities_root(data)?.join(id_part)?;
+            let published = DateTime::from_timestamp_millis(row.get("published")).ok_or_else(|| anyhow!("not a valid date!"))?;
+            match (kind.as_str(), object) {
+                ("Create", Some(object)) => Ok(Some(Outbound::CreateArticle {
+                    kind: CreateType::Create,
+                    id_part: id_part.to_owned(),
+                    id: full_url,
+                    actor,
+                    published,
+                    object: serde_json::from_str(&object)?
+                })),
+                ("Update", Some(object)) => Ok(Some(Outbound::ModifyArticle {
+                    kind: UpdateType::Update,
+                    id_part: id_part.to_owned(),
+                    id: full_url,
+                    actor,
+                    published,
+                    object: serde_json::from_str(&object)?
+                })),
+                ("Accept(Follow)", Some(object)) => Ok(Some(Outbound::AcceptFollow {
+                    kind: AcceptType::Accept,
+                    id_part: id_part.to_owned(),
+                    id: full_url,
+                    actor,
+                    published,
+                    object: serde_json::from_str(&object)?
+                })),
+                _ => Ok(None)
+            }
+        }
+    }
+}
+
+pub(crate) async fn get_outbound_for(data: &Data<Arc<AppState>>, actor: &ObjectId<DbUser>) -> Result<Vec<Url>, Error> {
+    let rows: Vec<String> = sqlx::query_scalar("SELECT id_part FROM outbound_activities WHERE actor = ? ORDER BY published DESC")
+        .bind(actor.inner().as_str())
+        .fetch_all(&data.database)
+        .await?;
+    rows.into_iter().map(|row| {
+        Ok(get_activities_root(data)?.join(&row)?)
+    }).collect()
 }

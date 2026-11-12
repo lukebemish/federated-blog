@@ -1,6 +1,6 @@
 use serde::{Deserialize, Deserializer, de::IgnoredAny};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct DummyContext;
 
 impl<'de> Deserialize<'de> for DummyContext {

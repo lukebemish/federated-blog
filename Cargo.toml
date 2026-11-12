@@ -8,10 +8,11 @@ activitypub_federation = { version = ">=0.7.0-beta.14", default-features = false
 anyhow = "1.0.104"
 async-trait = "0.1.92"
 axum = { version = "0.8.9", features = ["macros"] }
-chrono = "0.4.45"
+chrono = { version = "0.4.45", features = ["serde"] }
 clap = { version = "4.6.7", features = ["derive"] }
 enum_delegate = "0.2.0"
 env_logger = "0.11.11"
+futures = "0.3.34"
 log = "0.4.35"
 reqwest = { version = "0.13.5", features = ["json", "stream"] }
 reqwest-middleware = "0.5.2"
@@ -22,3 +23,4 @@ sqlx = { version = "0.9.0", features = ["runtime-tokio", "sqlite"] }
 tokio = { version = "1.54.1", features = ["full"] }
 tower-http = { version = "0.7.1", features = ["cors"] }
 url = { version = "2.5.8", features = ["serde"] }
+uuid = { version = "1.29.2", features = ["v4"] }

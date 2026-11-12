@@ -29,7 +29,7 @@ pub(crate) async fn run_index(state: &Data<Arc<AppState>>) -> Result<(), Error> 
             .await?
             .error_for_status()?
             .json().await?;
-        DbLocalArticle::new_local(state, value, self_alias_with_slash.join(&post.id)?).await?;
+        DbLocalArticle::new_local(state, value, self_alias_with_slash.join("objects/")?.join(&post.id)?).await?;
     }
     Ok(())
 }
