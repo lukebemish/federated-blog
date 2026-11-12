@@ -173,7 +173,16 @@ async fn main() -> Result<(), Error> {
         .build()
         .await?;
 
-    DbUser::new_local(&ap_config.to_request_data()).await?;
+    let local_user = DbUser::new_local(&ap_config.to_request_data()).await?;
+
+    // Now rebuild it with a signing actor
+
+    let ap_config = FederationConfig::builder()
+        .domain(&state.config.host.host.to_string())
+        .app_data(state.clone())
+        .signed_fetch_actor(&local_user)
+        .build()
+        .await?;
 
     let data = ap_config.to_request_data();
     tokio::spawn(async move {
