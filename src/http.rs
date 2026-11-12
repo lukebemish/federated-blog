@@ -82,7 +82,10 @@ pub(crate) async fn http_post_user_inbox(
         activity_data,
         &data,
     )
-    .await
+    .await.map_err(|e| {
+        log::error!("{}", e);
+        StatusCode::UNPROCESSABLE_ENTITY
+    })
 }
 
 #[debug_handler]
