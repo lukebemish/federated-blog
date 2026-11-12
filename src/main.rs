@@ -92,6 +92,8 @@ struct Config {
     username: String,
     host: HostUrl,
     homepage: Url,
+    #[serde(default)]
+    attribution_domains: Vec<String>,
     icon: Option<Value>,
     image: Option<Value>,
     name: String,

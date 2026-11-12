@@ -79,7 +79,8 @@ impl DbUser {
         let mut values: HashMap<String, Value> = HashMap::from([
             ("memorial".to_owned(), json!(false)),
             ("discoverable".to_owned(), json!(true)),
-            ("manuallyApprovesFollowers".to_owned(), json!(false))
+            ("manuallyApprovesFollowers".to_owned(), json!(false)),
+            ("attributionDomains".to_owned(), json!(&state.config.attribution_domains)),
         ]);
         values.insert("url".to_string(), json!(state.config.homepage.to_string()));
         if let Some(icon) = state.config.icon.as_ref() {
