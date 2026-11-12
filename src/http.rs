@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
 use activitypub_federation::{axum::{inbox::{ActivityData, receive_activity}, json::FederationJson}, config::Data, fetch::webfinger::{Webfinger, build_webfinger_response, extract_webfinger_name}, kinds::collection::OrderedCollectionType::OrderedCollection, protocol::context::WithContext, traits::Object};
-use axum::{Json, debug_handler, extract::{Path, Query}, response::{IntoResponse, Response}};
+use axum::{Json, debug_handler, extract::{Path, Query}, http::HeaderMap, response::{IntoResponse, Redirect, Response}};
 use log::error;
-use reqwest::StatusCode;
+use reqwest::{StatusCode, header::ACCEPT};
 use serde::Deserialize;
+use serde_json::Value;
 
-use crate::{AppState, Error, default_context, get_self_alias, types::{activities::{get_followers, get_outbound, get_outbound_for}, collections::LocalUserOwnedCollection, objects::{article::{DbLocalArticle, LocalArticle}, person::{DbUser, Person, PersonAcceptedActivities}}}, with_slash};
+use crate::{AppState, Error, default_context, get_self_alias, types::{activities::{get_followers, get_outbound, get_outbound_for}, collections::LocalUserOwnedCollection, objects::{article::DbLocalArticle, person::{DbUser, PersonAcceptedActivities}}}, with_slash};
 
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
@@ -20,17 +21,32 @@ impl IntoResponse for Error {
     }
 }
 
+fn should_serve_html(headers: HeaderMap) -> bool {
+    if let Some(accept) = headers.get(ACCEPT) {
+        if let Ok(accept_str) = accept.to_str() {
+            if accept_str.contains("text/html") && !accept_str.contains("application/activity+json") && !accept_str.contains("application/ld+json") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 #[debug_handler]
 pub(crate) async fn http_get_user(
     Path(name): Path<String>,
     data: Data<Arc<AppState>>,
-) -> Result<FederationJson<WithContext<Person>>, Error> {
+    headers: HeaderMap
+) -> Result<Response, Error> {
     let db_user = DbUser::find_local(&data, &name).await?;
     match db_user {
         None => Err(Error::Status(StatusCode::NOT_FOUND)),
         Some(user) => {
+            if let Some(Value::String(url)) = user.extra.get("url") && should_serve_html(headers) {
+                return Ok(Redirect::to(url).into_response());
+            }
             let json_user = user.into_json(&data).await?;
-            Ok(FederationJson(WithContext::new(json_user, default_context())))
+            Ok(FederationJson(WithContext::new(json_user, default_context())).into_response())
         }
     }
 }
@@ -39,7 +55,8 @@ pub(crate) async fn http_get_user(
 pub(crate) async fn http_get_article(
     Path((_, path)): Path<(String, String)>,
     data: Data<Arc<AppState>>,
-) -> Result<FederationJson<WithContext<LocalArticle>>, Error> {
+    headers: HeaderMap
+) -> Result<Response, Error> {
     let db_local_article = DbLocalArticle::read_from_id(
         with_slash(&get_self_alias(&data)?)?.join("objects/")?.join(&path)?,
         &data
@@ -47,8 +64,11 @@ pub(crate) async fn http_get_article(
     match db_local_article {
         None => Err(Error::Status(StatusCode::NOT_FOUND)),
         Some(local_article) => {
+            if should_serve_html(headers) {
+                return Ok(Redirect::to(local_article.url.as_str()).into_response());
+            }
             let json_local_article = local_article.into_json(&data).await?;
-            Ok(FederationJson(WithContext::new(json_local_article, default_context())))
+            Ok(FederationJson(WithContext::new(json_local_article, default_context())).into_response())
         }
     }
 }
