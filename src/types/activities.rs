@@ -19,7 +19,9 @@ pub(crate) struct Follow {
     pub(crate) object: ObjectId<DbUser>,
     #[serde(rename = "type")]
     pub(crate) kind: FollowType,
-    pub(crate) id: Url
+    pub(crate) id: Url,
+    #[serde(flatten)]
+    pub(crate) extra: HashMap<String, Value>
 }
 
 #[async_trait]
@@ -40,6 +42,7 @@ impl Activity for Follow {
     }
 
     async fn receive(self, data: &Data<Self::DataType>) -> Result<(), Self::Error> {
+        let clone = self.clone();
         let actor = self.actor.dereference(data).await?;
         let followed = self.object.dereference(data).await?;
         if followed.local.is_some() && actor.local.is_none() {
@@ -52,7 +55,7 @@ impl Activity for Follow {
                 format!("Could not follow: actor {} trying to follow target {}", actor.ap_id.inner(), followed.ap_id.inner()
             ))));
         }
-        Outbound::accept_follow(data, &followed.ap_id, self.clone()).await?;
+        Outbound::accept_follow(data, &followed.ap_id, clone).await?;
         log::info!("Accepted follow from {}", actor.ap_id.inner());
         Ok(())
     }
@@ -172,9 +175,7 @@ pub(crate) enum Outbound {
         id: Url,
         actor: ObjectId<DbUser>,
         published: DateTime<Utc>,
-        object: Url,
-        #[serde(skip_serializing)]
-        full_object: Follow
+        object: Follow,
     },
 }
 
@@ -256,8 +257,7 @@ impl Outbound {
             id,
             actor: actor.clone(),
             published: Utc::now(),
-            object: follow.id.clone(),
-            full_object: follow
+            object: follow
         };
         submit_outbound(state, activity).await?;
         Ok(())
@@ -304,23 +304,22 @@ pub(crate) async fn submit_outbound(data: &Data<Arc<AppState>>, outbound: Outbou
             kind: _,
             id_part,
             actor,
-            full_object,
-            object: _,
+            object,
             published,
             id: _
         } => sqlx::query("INSERT INTO outbound_activities (id_part, actor, kind, object, published) VALUES (?, ?, ?, ?, ?)")
             .bind(id_part)
             .bind(actor.inner().as_str())
             .bind("Accept(Follow)")
-            .bind(serde_json::to_string(&full_object)?)
+            .bind(serde_json::to_string(&object)?)
             .bind(published.timestamp_millis()),
     }.execute(&data.database).await?;
 
     let inboxes = match &outbound {
         CreateArticle { .. } => get_inboxes(data, get_followers(data, outbound.actor_id()).await?).await?,
         ModifyArticle { .. } => get_inboxes(data, get_followers(data, outbound.actor_id()).await?).await?,
-        AcceptFollow { full_object, .. } => vec![
-            full_object.actor.clone().dereference(data).await?.inbox()
+        AcceptFollow { object, .. } => vec![
+            object.actor.clone().dereference(data).await?.inbox()
         ],
     };
 
@@ -379,18 +378,14 @@ pub(crate) async fn get_outbound(data: &Data<Arc<AppState>>, id_part: &str) -> R
                     published,
                     object: serde_json::from_str(&object)?
                 })),
-                ("Accept(Follow)", Some(object)) => {
-                    let follow: Follow = serde_json::from_str(&object)?;
-                    Ok(Some(Outbound::AcceptFollow {
-                        kind: AcceptType::Accept,
-                        id_part: id_part.to_owned(),
-                        id: full_url,
-                        actor,
-                        published,
-                        object: follow.id.clone(),
-                        full_object: follow,
-                    }))
-                },
+                ("Accept(Follow)", Some(object)) => Ok(Some(Outbound::AcceptFollow {
+                    kind: AcceptType::Accept,
+                    id_part: id_part.to_owned(),
+                    id: full_url,
+                    actor,
+                    published,
+                    object: serde_json::from_str(&object)?
+                })),
                 _ => Ok(None)
             }
         }
