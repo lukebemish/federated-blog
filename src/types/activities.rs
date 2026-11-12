@@ -312,12 +312,13 @@ pub(crate) async fn submit_outbound(data: &Data<Arc<AppState>>, outbound: Outbou
             .bind(published.timestamp_millis()),
     }.execute(&data.database).await?;
 
-    let actors = match &outbound {
-        CreateArticle { .. } => get_followers(data, outbound.actor_id()).await?,
-        ModifyArticle { .. } => get_followers(data, outbound.actor_id()).await?,
-        AcceptFollow { object, .. } => vec![object.actor.clone()],
+    let inboxes = match &outbound {
+        CreateArticle { .. } => get_inboxes(data, get_followers(data, outbound.actor_id()).await?).await?,
+        ModifyArticle { .. } => get_inboxes(data, get_followers(data, outbound.actor_id()).await?).await?,
+        AcceptFollow { object, .. } => vec![
+            object.actor.clone().dereference(data).await?.inbox()
+        ],
     };
-    let inboxes = get_inboxes(data, actors).await?;
 
     let actor = outbound.actor_id().dereference(&data).await?;
 
