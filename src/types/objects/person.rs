@@ -81,6 +81,17 @@ impl DbUser {
             ("discoverable".to_owned(), json!(true)),
             ("manuallyApprovesFollowers".to_owned(), json!(false)),
             ("attributionDomains".to_owned(), json!(&state.config.attribution_domains)),
+            ("attachment".to_owned(), json!([{
+                "type": "PropertyValue",
+                "name": "Web",
+                "value": format!(
+                    "<a href=\"{}\" target=\"_blank\" rel=\"nofollow noopener me\" translate=\"no\"><span class=\"invisible\">{}://</span><span class=\"\">{}</span><span class=\"invisible\">{}</span></a>",
+                    &state.config.homepage,
+                    &state.config.homepage.scheme(),
+                    &state.config.homepage.host_str().unwrap_or(""),
+                    &state.config.homepage.path(),
+                )
+            }]))
         ]);
         values.insert("url".to_string(), json!(state.config.homepage.to_string()));
         if let Some(icon) = state.config.icon.as_ref() {

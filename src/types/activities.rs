@@ -1,11 +1,11 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::{BTreeSet, HashMap}, sync::Arc};
 
 use activitypub_federation::{activity_queue::queue_activity, config::Data, fetch::object_id::ObjectId, kinds::activity::{AcceptType, CreateType, FollowType, UndoType, UpdateType}, traits::{Activity, Actor}};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::future::join_all;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer, ser::SerializeMap};
 use serde_json::Value;
 use sqlx::Row;
 use url::Url;
@@ -137,9 +137,8 @@ impl Activity for UnknownActivity {
         Ok(())
     }
 
-    async fn receive(self, data: &Data<Self::DataType>) -> Result<(), Self::Error> {
-        let actor = self.actor.dereference(data).await?;
-        log::info!("No-op for unknown activity {} from {}", serde_json::to_string(&self)?, actor.ap_id.inner());
+    async fn receive(self, _: &Data<Self::DataType>) -> Result<(), Self::Error> {
+        log::info!("No-op for unknown activity {} from {}", serde_json::to_string(&self)?, self.actor.inner());
         Ok(())
     }
 }
@@ -155,6 +154,7 @@ pub(crate) enum Outbound {
         id: Url,
         actor: ObjectId<DbUser>,
         published: DateTime<Utc>,
+        #[serde(serialize_with = "serialize_copy_object_recipients", flatten)]
         object: LocalArticle,
     },
     ModifyArticle {
@@ -165,6 +165,7 @@ pub(crate) enum Outbound {
         id: Url,
         actor: ObjectId<DbUser>,
         published: DateTime<Utc>,
+        #[serde(serialize_with = "serialize_copy_object_recipients", flatten)]
         object: LocalArticle,
     },
     AcceptFollow {
@@ -175,8 +176,28 @@ pub(crate) enum Outbound {
         id: Url,
         actor: ObjectId<DbUser>,
         published: DateTime<Utc>,
+        #[serde(serialize_with = "serialize_to_activity_actor", flatten)]
         object: Follow,
     },
+}
+
+fn serialize_copy_object_recipients<S>(field: &LocalArticle, serializer: S) -> Result<S::Ok, S::Error>
+    where S: Serializer
+{
+    let mut map = serializer.serialize_map(Some(3))?;
+    map.serialize_entry("object", field)?;
+    map.serialize_entry("to", &field.to)?;
+    map.serialize_entry("cc", &field.cc)?;
+    map.end()
+}
+
+fn serialize_to_activity_actor<S, A>(field: &A, serializer: S) -> Result<S::Ok, S::Error>
+    where S: Serializer, A: Activity + Serialize
+{
+    let mut map = serializer.serialize_map(Some(2))?;
+    map.serialize_entry("object", field)?;
+    map.serialize_entry("to", &vec![field.actor()])?;
+    map.end()
 }
 
 #[async_trait]
@@ -322,6 +343,8 @@ pub(crate) async fn submit_outbound(data: &Data<Arc<AppState>>, outbound: Outbou
             object.actor.clone().dereference(data).await?.inbox()
         ],
     };
+    let inboxes: BTreeSet<Url> = inboxes.into_iter().collect();
+    let inboxes: Vec<Url> = inboxes.into_iter().collect();
 
     let actor = outbound.actor_id().dereference(&data).await?;
 

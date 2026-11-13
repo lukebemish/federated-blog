@@ -77,9 +77,9 @@ pub(crate) struct LocalArticle {
     attributed_to: ObjectId<DbUser>,
     url: Url,
     #[serde(default)]
-    to: Vec<Url>,
+    pub(crate) to: Vec<Url>,
     #[serde(default)]
-    cc: Vec<Url>,
+    pub(crate) cc: Vec<Url>,
     #[serde(skip_serializing, default, rename = "@context")]
     _context: DummyContext,
     #[serde(flatten)]
