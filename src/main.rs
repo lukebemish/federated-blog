@@ -154,8 +154,8 @@ impl <R, E: Debug> Loggable<R> for Result<R, E> {
 async fn main() -> Result<(), Error> {
     env_logger::Builder::from_default_env()
         .filter_level(LevelFilter::Warn)
-        .filter_module("activitypub_federation", LevelFilter::Debug)
-        .filter_module("federated_blog", LevelFilter::Debug)
+        .filter_module("activitypub_federation", LevelFilter::Info)
+        .filter_module("federated_blog", LevelFilter::Info)
         .format_timestamp(None)
         .init();
 
