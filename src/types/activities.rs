@@ -42,6 +42,7 @@ impl Activity for Follow {
     }
 
     async fn receive(self, data: &Data<Self::DataType>) -> Result<(), Self::Error> {
+        log::info!("{:?}", &self);
         let clone = self.clone();
         let actor = self.actor.dereference(data).await?;
         let followed = self.object.dereference(data).await?;
