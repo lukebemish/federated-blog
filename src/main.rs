@@ -26,8 +26,12 @@ fn default_context() -> Value {
             "toot": "http://joinmastodon.org/ns#",
             "manuallyApprovesFollowers": "as:manuallyApprovesFollowers",
             "discoverable": "toot:discoverable",
+            "indexable": "toot:indexable",
             "memorial": "toot:memorial",
-            "Hashtag": "as:Hashtag"
+            "Hashtag": "as:Hashtag",
+            "schema": "http://schema.org#",
+            "PropertyValue": "schema:PropertyValue",
+            "value": "schema:value"
         }
     ])
 }

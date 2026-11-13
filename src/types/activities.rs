@@ -42,7 +42,6 @@ impl Activity for Follow {
     }
 
     async fn receive(self, data: &Data<Self::DataType>) -> Result<(), Self::Error> {
-        log::info!("{:?}", &self);
         let clone = self.clone();
         let actor = self.actor.dereference(data).await?;
         let followed = self.object.dereference(data).await?;
@@ -340,14 +339,18 @@ pub(crate) async fn submit_outbound(data: &Data<Arc<AppState>>, outbound: Outbou
     let inboxes = match &outbound {
         CreateArticle { .. } => get_inboxes(data, get_followers(data, outbound.actor_id()).await?).await?,
         ModifyArticle { .. } => get_inboxes(data, get_followers(data, outbound.actor_id()).await?).await?,
-        AcceptFollow { object, .. } => vec![
-            object.actor.clone().dereference(data).await?.inbox()
+        AcceptFollow { object: follow, .. } => vec![
+            follow.actor.clone().dereference(data).await?.inbox()
         ],
     };
     let inboxes: BTreeSet<Url> = inboxes.into_iter().collect();
     let inboxes: Vec<Url> = inboxes.into_iter().collect();
 
-    let actor = outbound.actor_id().dereference(&data).await?;
+    let actor = outbound.actor_id().dereference_local(&data).await?;
+
+    if let None = actor.local {
+        return Err(Error::Simple(anyhow!("Cannot send activity for non-local actor {}", actor.ap_id.inner().as_str())))
+    }
 
     queue_activity(&outbound, &actor, inboxes, &data).await?;
 
