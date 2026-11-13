@@ -1,6 +1,6 @@
 use std::{collections::{BTreeMap}, sync::Arc};
 
-use activitypub_federation::{activity_queue::queue_activity, config::Data, fetch::object_id::ObjectId, kinds::activity::{AcceptType, CreateType, FollowType, UndoType, UpdateType}, traits::{Activity, Actor}};
+use activitypub_federation::{activity_queue::queue_activity, config::Data, fetch::object_id::ObjectId, kinds::activity::{AcceptType, CreateType, FollowType, UndoType, UpdateType}, protocol::context::WithContext, traits::{Activity, Actor}};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -200,41 +200,25 @@ fn serialize_copy_object_recipients<S>(field: &LocalArticle, serializer: S) -> R
     map.end()
 }
 
-#[derive(Debug, Clone)]
-struct OutboundWithContext(Outbound);
-
-impl Serialize for OutboundWithContext {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where S: Serializer
-    {
-        #[derive(Serialize)]
-        struct Helper<'a> {
-            #[serde(rename = "@context")]
-            context: & 'a Value,
-            #[serde(flatten)]
-            outbound: & 'a Outbound
-        }
-
-        let helper = Helper {
-            context: &default_context(),
-            outbound: &self.0
-        };
-
-        helper.serialize(serializer)
-    }
-}
-
 #[async_trait]
-impl Activity for OutboundWithContext {
+impl Activity for Outbound {
     type DataType = Arc<AppState>;
     type Error = Error;
 
     fn id(&self) -> &Url {
-        self.0.id()
+        match self {
+            CreateArticle { id, .. } => id,
+            ModifyArticle { id, .. } => id,
+            AcceptFollow { id, .. } => id,
+        }
     }
 
     fn actor(&self) -> &Url {
-        self.0.actor()
+        match self {
+            CreateArticle { actor, .. } => actor.inner(),
+            ModifyArticle { actor, .. } => actor.inner(),
+            AcceptFollow { actor, .. } => actor.inner(),
+        }
     }
     
     async fn verify(&self,  _data: &Data<Self::DataType>) -> Result<(), Self::Error> {
@@ -252,22 +236,6 @@ impl Outbound {
             CreateArticle { actor, .. } => actor,
             ModifyArticle { actor, .. } => actor,
             AcceptFollow { actor, .. } => actor,
-        }
-    }
-
-    fn id(&self) -> &Url {
-        match self {
-            CreateArticle { id, .. } => id,
-            ModifyArticle { id, .. } => id,
-            AcceptFollow { id, .. } => id,
-        }
-    }
-
-    fn actor(&self) -> &Url {
-        match self {
-            CreateArticle { actor, .. } => actor.inner(),
-            ModifyArticle { actor, .. } => actor.inner(),
-            AcceptFollow { actor, .. } => actor.inner(),
         }
     }
 
@@ -384,7 +352,7 @@ pub(crate) async fn submit_outbound(data: &Data<Arc<AppState>>, outbound: Outbou
         return Err(Error::Simple(anyhow!("Cannot send activity for non-local actor {}", actor.ap_id.inner().as_str())))
     }
 
-    queue_activity(&OutboundWithContext(outbound), &actor, inboxes, &data).await?;
+    queue_activity(&WithContext::new(outbound, default_context()), &actor, inboxes, &data).await?;
 
     Ok(())
 }
