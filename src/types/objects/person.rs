@@ -176,6 +176,8 @@ pub(crate) struct Person {
     outbox: Option<Url>,
     #[serde(skip_serializing_if = "Option::is_none")]
     followers: Option<Url>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    following: Option<Url>,
     public_key: PublicKey,
     #[serde(skip_serializing, default, rename = "@context")]
     _context: DummyContext,
@@ -245,6 +247,7 @@ impl Object for DbUser {
             shared_inbox: self.shared_inbox.clone(),
             outbox: self.local.as_ref().map(|u| u.outbox.clone()),
             followers: self.local.as_ref().map(|u| u.followers.clone()),
+            following: self.local.as_ref().map(|u| u.following.clone()),
             public_key: self.public_key(),
             _context: DummyContext,
             extra: self.extra.clone()
