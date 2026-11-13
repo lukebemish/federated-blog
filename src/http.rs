@@ -137,6 +137,27 @@ pub(crate) async fn http_get_user_followers(
 }
 
 #[debug_handler]
+pub(crate) async fn http_get_user_following(
+    Path(name): Path<String>,
+    data: Data<Arc<AppState>>,
+    Query(pagination): Query<Pagination>
+) -> impl IntoResponse {
+    let user = DbUser::find_local(&data, &name).await?;
+    if let Some(user) = user && let Some(local_user) = &user.local {
+        let outbox = LocalUserOwnedCollection::new(
+            local_user.following.clone(),
+            0,
+            pagination.page,
+            10,
+            async |_, _| Ok(vec![])
+        ).await?;
+        Ok(FederationJson(WithContext::new(outbox, default_context())))
+    } else {
+        Err(Error::Status(StatusCode::NOT_FOUND))
+    }
+}
+
+#[debug_handler]
 pub(crate) async fn http_get_outbound_activity(
     Path(id_part): Path<String>,
     data: Data<Arc<AppState>>

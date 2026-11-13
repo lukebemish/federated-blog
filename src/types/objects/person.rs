@@ -27,7 +27,8 @@ pub(crate) struct DbUser {
 pub(crate) struct LocalDbUser {
     pub(crate) private_key: String,
     pub(crate) outbox: Url,
-    pub(crate) followers: Url
+    pub(crate) followers: Url,
+    pub(crate) following: Url
 }
 
 /// List of all activities which this actor can receive.
@@ -44,14 +45,16 @@ pub(crate) enum PersonAcceptedActivities {
 pub(crate) enum LocalEndpoint {
     Outbox,
     Inbox,
-    Followers
+    Followers,
+    Following
 }
 
 pub(crate) fn get_local_endpoint(state: &AppState, endpoint: LocalEndpoint) -> Result<Url, Error> {
     Ok(with_slash(&get_self_alias(state)?)?.join(match endpoint {
         LocalEndpoint::Outbox => "outbox",
         LocalEndpoint::Inbox => "inbox",
-        LocalEndpoint::Followers => "followers"
+        LocalEndpoint::Followers => "followers",
+        LocalEndpoint::Following => "following"
     })?)
 }
 
@@ -74,11 +77,13 @@ impl DbUser {
         let local = LocalDbUser {
             private_key: keypair.private_key,
             outbox: get_local_endpoint(state, LocalEndpoint::Outbox)?,
-            followers: get_local_endpoint(state, LocalEndpoint::Followers)?
+            followers: get_local_endpoint(state, LocalEndpoint::Followers)?,
+            following: get_local_endpoint(state, LocalEndpoint::Following)?
         };
         let mut values: BTreeMap<String, Value> = BTreeMap::from([
             ("memorial".to_owned(), json!(false)),
             ("discoverable".to_owned(), json!(true)),
+            ("indexable".to_owned(), json!(true)),
             ("manuallyApprovesFollowers".to_owned(), json!(false)),
             ("attributionDomains".to_owned(), json!(&state.config.attribution_domains)),
             ("attachment".to_owned(), json!([{
@@ -217,7 +222,8 @@ impl Object for DbUser {
                             LocalDbUser {
                                 private_key: local_row.get("private_key"),
                                 outbox: get_local_endpoint(data, LocalEndpoint::Outbox)?,
-                                followers: get_local_endpoint(data, LocalEndpoint::Followers)?
+                                followers: get_local_endpoint(data, LocalEndpoint::Followers)?,
+                                following: get_local_endpoint(data, LocalEndpoint::Following)?
                             }
                         )
                     },

@@ -209,6 +209,7 @@ async fn main() -> Result<(), Error> {
         .route("/@{user}/inbox", post(http::http_post_user_inbox))
         .route("/@{user}/outbox", get(http::http_get_user_outbox))
         .route("/@{user}/followers", get(http::http_get_user_followers))
+        .route("/@{user}/following", get(http::http_get_user_following))
         .route("/activities/{id}", get(http::http_get_outbound_activity))
         .route("/.well-known/webfinger", get(http::webfinger))
         .layer(FederationMiddleware::new(ap_config))
