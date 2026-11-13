@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use activitypub_federation::{axum::{inbox::{ActivityData, receive_activity}, json::FederationJson}, config::Data, fetch::webfinger::{Webfinger, build_webfinger_response, extract_webfinger_name}, kinds::collection::OrderedCollectionType::OrderedCollection, protocol::context::WithContext, traits::Object};
+use activitypub_federation::{axum::{inbox::{ActivityData, receive_activity}, json::FederationJson}, config::Data, fetch::webfinger::{Webfinger, build_webfinger_response, extract_webfinger_name}, protocol::context::WithContext, traits::Object};
 use axum::{Json, debug_handler, extract::{Path, Query}, http::HeaderMap, response::{IntoResponse, Redirect, Response}};
 use log::error;
 use reqwest::{StatusCode, header::ACCEPT};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::{AppState, Error, default_context, get_self_alias, types::{activities::{get_followers, get_outbound, get_outbound_for}, collections::LocalUserOwnedCollection, objects::{article::DbLocalArticle, person::{DbUser, PersonAcceptedActivities}}}, with_slash};
+use crate::{AppState, Error, default_context, get_self_alias, types::{activities::{count_followers, count_outbound_for, get_followers_from, get_outbound, get_outbound_for}, collections::LocalUserOwnedCollection, objects::{article::DbLocalArticle, person::{DbUser, PersonAcceptedActivities}}}, with_slash};
 
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
@@ -88,20 +88,26 @@ pub(crate) async fn http_post_user_inbox(
     })
 }
 
+#[derive(Deserialize)]
+pub(crate) struct Pagination {
+    page: Option<usize>,
+}
+
 #[debug_handler]
 pub(crate) async fn http_get_user_outbox(
     Path(name): Path<String>,
-    data: Data<Arc<AppState>>
+    data: Data<Arc<AppState>>,
+    Query(pagination): Query<Pagination>
 ) -> impl IntoResponse {
     let user = DbUser::find_local(&data, &name).await?;
     if let Some(user) = user && let Some(local_user) = &user.local {
-        let outbound = get_outbound_for(&data, &user.ap_id).await?;
-        let outbox = LocalUserOwnedCollection {
-            id: local_user.outbox.clone(),
-            kind: OrderedCollection,
-            total_items: outbound.len(),
-            ordered_items: outbound
-        };
+        let outbox = LocalUserOwnedCollection::new(
+            local_user.outbox.clone(),
+            count_outbound_for(&data, &user.ap_id).await?,
+            pagination.page,
+            10,
+            async |start, limit| get_outbound_for(&data, &user.ap_id, start, limit).await
+        ).await?;
         Ok(FederationJson(WithContext::new(outbox, default_context())))
     } else {
         Err(Error::Status(StatusCode::NOT_FOUND))
@@ -111,17 +117,19 @@ pub(crate) async fn http_get_user_outbox(
 #[debug_handler]
 pub(crate) async fn http_get_user_followers(
     Path(name): Path<String>,
-    data: Data<Arc<AppState>>
+    data: Data<Arc<AppState>>,
+    Query(pagination): Query<Pagination>
 ) -> impl IntoResponse {
     let user = DbUser::find_local(&data, &name).await?;
     if let Some(user) = user && let Some(local_user) = &user.local {
-        let followers = get_followers(&data, &user.ap_id).await?;
-        let outbox = LocalUserOwnedCollection {
-            id: local_user.followers.clone(),
-            kind: OrderedCollection,
-            total_items: followers.len(),
-            ordered_items: followers.into_iter().map(|id| id.into_inner()).collect()
-        };
+        let outbox = LocalUserOwnedCollection::new(
+            local_user.followers.clone(),
+            count_followers(&data, &user.ap_id).await?,
+            pagination.page,
+            10,
+            async |start, limit| Ok(get_followers_from(&data, &user.ap_id, start, limit).await?
+                .into_iter().map(|id| id.into_inner()).collect())
+        ).await?;
         Ok(FederationJson(WithContext::new(outbox, default_context())))
     } else {
         Err(Error::Status(StatusCode::NOT_FOUND))

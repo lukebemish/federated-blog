@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::Row;
-use std::{collections::HashMap, fmt::Debug, sync::Arc};
+use std::{collections::{BTreeMap}, fmt::Debug, sync::Arc};
 use url::Url;
 
 #[derive(Debug, Clone)]
@@ -19,7 +19,7 @@ pub(crate) struct DbUser {
     pub(crate) shared_inbox: Option<Url>,
     pub(crate) public_key: String,
     last_refreshed_at: DateTime<Utc>,
-    pub(crate) extra: HashMap<String, Value>,
+    pub(crate) extra: BTreeMap<String, Value>,
     pub(crate) local: Option<LocalDbUser>,
 }
 
@@ -76,7 +76,7 @@ impl DbUser {
             outbox: get_local_endpoint(state, LocalEndpoint::Outbox)?,
             followers: get_local_endpoint(state, LocalEndpoint::Followers)?
         };
-        let mut values: HashMap<String, Value> = HashMap::from([
+        let mut values: BTreeMap<String, Value> = BTreeMap::from([
             ("memorial".to_owned(), json!(false)),
             ("discoverable".to_owned(), json!(true)),
             ("manuallyApprovesFollowers".to_owned(), json!(false)),
@@ -175,7 +175,7 @@ pub(crate) struct Person {
     #[serde(skip_serializing, default, rename = "@context")]
     _context: DummyContext,
     #[serde(flatten)]
-    extra: HashMap<String, Value>
+    extra: BTreeMap<String, Value>
 }
 
 #[async_trait::async_trait]

@@ -1,4 +1,4 @@
-use std::{collections::{BTreeSet, HashMap}, sync::Arc};
+use std::{collections::{BTreeMap, BTreeSet}, sync::Arc};
 
 use activitypub_federation::{activity_queue::queue_activity, config::Data, fetch::object_id::ObjectId, kinds::activity::{AcceptType, CreateType, FollowType, UndoType, UpdateType}, traits::{Activity, Actor}};
 use anyhow::anyhow;
@@ -21,7 +21,7 @@ pub(crate) struct Follow {
     pub(crate) kind: FollowType,
     pub(crate) id: Url,
     #[serde(flatten)]
-    pub(crate) extra: HashMap<String, Value>
+    pub(crate) extra: BTreeMap<String, Value>
 }
 
 #[async_trait]
@@ -117,7 +117,7 @@ pub(crate) struct UnknownActivity {
     pub(crate) kind: String,
     pub(crate) id: Url,
     #[serde(flatten)]
-    pub(crate) extra: HashMap<String, Value>
+    pub(crate) extra: BTreeMap<String, Value>
 }
 
 #[async_trait]
@@ -360,9 +360,32 @@ async fn get_inboxes(data: &Data<Arc<AppState>>, actors: Vec<ObjectId<DbUser>>) 
     })).await.into_iter().collect::<Result<Vec<Url>, Error>>()
 }
 
+pub(crate) async fn count_followers(data: &Data<Arc<AppState>>, actor: &ObjectId<DbUser>) -> Result<usize, Error> {
+    let count: u64 = sqlx::query_scalar("SELECT COUNT(*) FROM followers WHERE followee = ?")
+        .bind(actor.inner().as_str())
+        .fetch_one(&data.database)
+        .await?;
+    Ok(count.try_into()?)
+}
+
 pub(crate) async fn get_followers(data: &Data<Arc<AppState>>, actor: &ObjectId<DbUser>) -> Result<Vec<ObjectId<DbUser>>, Error> {
     let followers: Vec<String> = sqlx::query_scalar("SELECT follower FROM followers WHERE followee = ?")
         .bind(actor.inner().as_str())
+        .fetch_all(&data.database)
+        .await?;
+    followers.iter().map(|follower| {
+        let id = Url::parse(follower)?;
+        Ok(ObjectId::<DbUser>::from(id))
+    }).collect()
+}
+
+pub(crate) async fn get_followers_from(data: &Data<Arc<AppState>>, actor: &ObjectId<DbUser>, start: usize, limit: usize) -> Result<Vec<ObjectId<DbUser>>, Error> {
+    let limit: u32 = limit.try_into()?;
+    let start: u32 = start.try_into()?;
+    let followers: Vec<String> = sqlx::query_scalar("SELECT follower FROM followers WHERE followee = ? LIMIT ? OFFSET ?")
+        .bind(actor.inner().as_str())
+        .bind(limit)
+        .bind(start)
         .fetch_all(&data.database)
         .await?;
     followers.iter().map(|follower| {
@@ -415,9 +438,21 @@ pub(crate) async fn get_outbound(data: &Data<Arc<AppState>>, id_part: &str) -> R
     }
 }
 
-pub(crate) async fn get_outbound_for(data: &Data<Arc<AppState>>, actor: &ObjectId<DbUser>) -> Result<Vec<Url>, Error> {
-    let rows: Vec<String> = sqlx::query_scalar("SELECT id_part FROM outbound_activities WHERE actor = ? ORDER BY published DESC")
+pub(crate) async fn count_outbound_for(data: &Data<Arc<AppState>>, actor: &ObjectId<DbUser>) -> Result<usize, Error> {
+    let count: u64 = sqlx::query_scalar("SELECT COUNT(*) FROM outbound_activities WHERE actor = ?")
         .bind(actor.inner().as_str())
+        .fetch_one(&data.database)
+        .await?;
+    Ok(count.try_into()?)
+}
+
+pub(crate) async fn get_outbound_for(data: &Data<Arc<AppState>>, actor: &ObjectId<DbUser>, start: usize, limit: usize) -> Result<Vec<Url>, Error> {
+    let limit: u32 = limit.try_into()?;
+    let start: u32 = start.try_into()?;
+    let rows: Vec<String> = sqlx::query_scalar("SELECT id_part FROM outbound_activities WHERE actor = ? ORDER BY published DESC LIMIT ? OFFSET ?")
+        .bind(actor.inner().as_str())
+        .bind(limit)
+        .bind(start)
         .fetch_all(&data.database)
         .await?;
     rows.into_iter().map(|row| {
