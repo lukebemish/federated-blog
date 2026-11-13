@@ -5,7 +5,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::future::join_all;
-use serde::{Deserialize, Serialize, Serializer, ser::SerializeMap};
+use serde::{Deserialize, Serialize, Serializer, ser::{SerializeMap, SerializeSeq}};
 use serde_json::Value;
 use sqlx::Row;
 use url::Url;
@@ -176,9 +176,18 @@ pub(crate) enum Outbound {
         id: Url,
         actor: ObjectId<DbUser>,
         published: DateTime<Utc>,
-        #[serde(serialize_with = "serialize_to_activity_actor", flatten)]
         object: Follow,
+        #[serde(rename = "to", serialize_with = "singleton_list")]
+        target_inbox: Url
     },
+}
+
+fn singleton_list<D, S>(field: &D, serializer: S) -> Result<S::Ok, S::Error>
+    where S: Serializer, D: Serialize
+{
+    let mut seq = serializer.serialize_seq(Some(1))?;
+    seq.serialize_element(field)?;
+    seq.end()
 }
 
 fn serialize_copy_object_recipients<S>(field: &LocalArticle, serializer: S) -> Result<S::Ok, S::Error>
@@ -188,15 +197,6 @@ fn serialize_copy_object_recipients<S>(field: &LocalArticle, serializer: S) -> R
     map.serialize_entry("object", field)?;
     map.serialize_entry("to", &field.to)?;
     map.serialize_entry("cc", &field.cc)?;
-    map.end()
-}
-
-fn serialize_to_activity_actor<S, A>(field: &A, serializer: S) -> Result<S::Ok, S::Error>
-    where S: Serializer, A: Activity + Serialize
-{
-    let mut map = serializer.serialize_map(Some(2))?;
-    map.serialize_entry("object", field)?;
-    map.serialize_entry("to", &vec![field.actor()])?;
     map.end()
 }
 
@@ -278,6 +278,7 @@ impl Outbound {
             id,
             actor: actor.clone(),
             published: Utc::now(),
+            target_inbox: follow.actor.clone().dereference(state).await?.inbox,
             object: follow
         };
         submit_outbound(state, activity).await?;
@@ -327,6 +328,7 @@ pub(crate) async fn submit_outbound(data: &Data<Arc<AppState>>, outbound: Outbou
             actor,
             object,
             published,
+            target_inbox: _,
             id: _
         } => sqlx::query("INSERT INTO outbound_activities (id_part, actor, kind, object, published) VALUES (?, ?, ?, ?, ?)")
             .bind(id_part)
@@ -426,14 +428,18 @@ pub(crate) async fn get_outbound(data: &Data<Arc<AppState>>, id_part: &str) -> R
                     published,
                     object: serde_json::from_str(&object)?
                 })),
-                ("Accept(Follow)", Some(object)) => Ok(Some(Outbound::AcceptFollow {
-                    kind: AcceptType::Accept,
-                    id_part: id_part.to_owned(),
-                    id: full_url,
-                    actor,
-                    published,
-                    object: serde_json::from_str(&object)?
-                })),
+                ("Accept(Follow)", Some(object)) => {
+                    let follow: Follow = serde_json::from_str(&object)?;
+                    Ok(Some(Outbound::AcceptFollow {
+                        kind: AcceptType::Accept,
+                        id_part: id_part.to_owned(),
+                        id: full_url,
+                        actor,
+                        published,
+                        target_inbox: follow.actor.clone().dereference(data).await?.inbox,
+                        object: follow
+                    }))
+                },
                 _ => Ok(None)
             }
         }
