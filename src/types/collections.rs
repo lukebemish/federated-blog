@@ -5,9 +5,9 @@ use url::Url;
 use crate::Error;
 
 #[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase", untagged)]
-#[serde()]
+#[serde(untagged)]
 pub(crate) enum LocalUserOwnedCollection {
+    #[serde(rename_all = "camelCase")]
     Root {
         id: Url,
         #[serde(rename = "type")]
@@ -16,6 +16,7 @@ pub(crate) enum LocalUserOwnedCollection {
         first: Url,
         last: Url
     },
+    #[serde(rename_all = "camelCase")]
     Page {
         id: Url,
         part_of: Url,
