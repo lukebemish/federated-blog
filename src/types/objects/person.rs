@@ -319,12 +319,4 @@ impl Actor for DbUser {
     fn shared_inbox(&self) -> Option<Url> {
         self.shared_inbox.clone()
     }
-
-    fn public_key(&self) -> PublicKey {
-        PublicKey {
-            owner: self.id().clone(),
-            id: format!("{}#main-signing-key", self.id()),
-            public_key_pem: self.public_key_pem().to_string()
-        }
-    }
 }

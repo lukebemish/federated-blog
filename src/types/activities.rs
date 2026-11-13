@@ -1,4 +1,4 @@
-use std::{collections::{BTreeMap, BTreeSet}, sync::Arc};
+use std::{collections::{BTreeMap}, sync::Arc};
 
 use activitypub_federation::{activity_queue::queue_activity, config::Data, fetch::object_id::ObjectId, kinds::activity::{AcceptType, CreateType, FollowType, UndoType, UpdateType}, traits::{Activity, Actor}};
 use anyhow::anyhow;
@@ -343,8 +343,6 @@ pub(crate) async fn submit_outbound(data: &Data<Arc<AppState>>, outbound: Outbou
             follow.actor.clone().dereference(data).await?.inbox()
         ],
     };
-    let inboxes: BTreeSet<Url> = inboxes.into_iter().collect();
-    let inboxes: Vec<Url> = inboxes.into_iter().collect();
 
     let actor = outbound.actor_id().dereference_local(&data).await?;
 
