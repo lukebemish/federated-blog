@@ -10,7 +10,7 @@ use serde_json::Value;
 use sqlx::Row;
 use url::Url;
 
-use crate::{AppState, Error, types::{activities::Outbound::{AcceptFollow, CreateArticle, ModifyArticle}, objects::{article::LocalArticle, person::DbUser}}};
+use crate::{AppState, Error, default_context, types::{activities::Outbound::{AcceptFollow, CreateArticle, ModifyArticle}, objects::{article::LocalArticle, person::DbUser}}};
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -200,25 +200,41 @@ fn serialize_copy_object_recipients<S>(field: &LocalArticle, serializer: S) -> R
     map.end()
 }
 
+#[derive(Debug, Clone)]
+struct OutboundWithContext(Outbound);
+
+impl Serialize for OutboundWithContext {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where S: Serializer
+    {
+        #[derive(Serialize)]
+        struct Helper<'a> {
+            #[serde(rename = "@context")]
+            context: & 'a Value,
+            #[serde(flatten)]
+            outbound: & 'a Outbound
+        }
+
+        let helper = Helper {
+            context: &default_context(),
+            outbound: &self.0
+        };
+
+        helper.serialize(serializer)
+    }
+}
+
 #[async_trait]
-impl Activity for Outbound {
+impl Activity for OutboundWithContext {
     type DataType = Arc<AppState>;
     type Error = Error;
 
     fn id(&self) -> &Url {
-        match self {
-            CreateArticle { id, .. } => id,
-            ModifyArticle { id, .. } => id,
-            AcceptFollow { id, .. } => id,
-        }
+        self.0.id()
     }
 
     fn actor(&self) -> &Url {
-        match self {
-            CreateArticle { actor, .. } => actor.inner(),
-            ModifyArticle { actor, .. } => actor.inner(),
-            AcceptFollow { actor, .. } => actor.inner(),
-        }
+        self.0.actor()
     }
     
     async fn verify(&self,  _data: &Data<Self::DataType>) -> Result<(), Self::Error> {
@@ -236,6 +252,22 @@ impl Outbound {
             CreateArticle { actor, .. } => actor,
             ModifyArticle { actor, .. } => actor,
             AcceptFollow { actor, .. } => actor,
+        }
+    }
+
+    fn id(&self) -> &Url {
+        match self {
+            CreateArticle { id, .. } => id,
+            ModifyArticle { id, .. } => id,
+            AcceptFollow { id, .. } => id,
+        }
+    }
+
+    fn actor(&self) -> &Url {
+        match self {
+            CreateArticle { actor, .. } => actor.inner(),
+            ModifyArticle { actor, .. } => actor.inner(),
+            AcceptFollow { actor, .. } => actor.inner(),
         }
     }
 
@@ -352,7 +384,7 @@ pub(crate) async fn submit_outbound(data: &Data<Arc<AppState>>, outbound: Outbou
         return Err(Error::Simple(anyhow!("Cannot send activity for non-local actor {}", actor.ap_id.inner().as_str())))
     }
 
-    queue_activity(&outbound, &actor, inboxes, &data).await?;
+    queue_activity(&OutboundWithContext(outbound), &actor, inboxes, &data).await?;
 
     Ok(())
 }
