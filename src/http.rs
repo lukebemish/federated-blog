@@ -7,7 +7,7 @@ use reqwest::{StatusCode, header::ACCEPT};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::{AppState, Error, default_context, get_self_alias, types::{activities::{count_followers, count_outbound_for, get_followers_from, get_outbound, get_outbound_for}, collections::LocalUserOwnedCollection, objects::{article::DbLocalArticle, person::{DbUser, PersonAcceptedActivities}}}, with_slash};
+use crate::{AppState, Error, default_context, get_self_alias, types::{activities::{count_followers, count_outbox_for, get_followers_from, get_outbound, get_outbox_for}, collections::LocalUserOwnedCollection, objects::{article::DbLocalArticle, person::{DbUser, PersonAcceptedActivities}}}, with_slash};
 
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
@@ -103,10 +103,10 @@ pub(crate) async fn http_get_user_outbox(
     if let Some(user) = user && let Some(local_user) = &user.local {
         let outbox = LocalUserOwnedCollection::new(
             local_user.outbox.clone(),
-            count_outbound_for(&data, &user.ap_id).await?,
+            count_outbox_for(&data, &user.ap_id).await?,
             pagination.page,
             10,
-            async |start, limit| get_outbound_for(&data, &user.ap_id, start, limit).await
+            async |start, limit| get_outbox_for(&data, &user.ap_id, start, limit).await
         ).await?;
         Ok(FederationJson(WithContext::new(outbox, default_context())))
     } else {

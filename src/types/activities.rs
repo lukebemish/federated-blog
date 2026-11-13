@@ -446,18 +446,18 @@ pub(crate) async fn get_outbound(data: &Data<Arc<AppState>>, id_part: &str) -> R
     }
 }
 
-pub(crate) async fn count_outbound_for(data: &Data<Arc<AppState>>, actor: &ObjectId<DbUser>) -> Result<usize, Error> {
-    let count: u64 = sqlx::query_scalar("SELECT COUNT(*) FROM outbound_activities WHERE actor = ?")
+pub(crate) async fn count_outbox_for(data: &Data<Arc<AppState>>, actor: &ObjectId<DbUser>) -> Result<usize, Error> {
+    let count: u64 = sqlx::query_scalar("SELECT COUNT(*) FROM outbound_activities WHERE actor = ? AND kind IN (Create, Update)")
         .bind(actor.inner().as_str())
         .fetch_one(&data.database)
         .await?;
     Ok(count.try_into()?)
 }
 
-pub(crate) async fn get_outbound_for(data: &Data<Arc<AppState>>, actor: &ObjectId<DbUser>, start: usize, limit: usize) -> Result<Vec<Url>, Error> {
+pub(crate) async fn get_outbox_for(data: &Data<Arc<AppState>>, actor: &ObjectId<DbUser>, start: usize, limit: usize) -> Result<Vec<Url>, Error> {
     let limit: u32 = limit.try_into()?;
     let start: u32 = start.try_into()?;
-    let rows: Vec<String> = sqlx::query_scalar("SELECT id_part FROM outbound_activities WHERE actor = ? ORDER BY published DESC LIMIT ? OFFSET ?")
+    let rows: Vec<String> = sqlx::query_scalar("SELECT id_part FROM outbound_activities WHERE actor = ? AND kind IN (Create, Update) ORDER BY published DESC LIMIT ? OFFSET ?")
         .bind(actor.inner().as_str())
         .bind(limit)
         .bind(start)
