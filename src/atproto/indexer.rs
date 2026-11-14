@@ -71,7 +71,7 @@ pub(crate) fn generate_tid() -> String {
     );
     tid = 0x1FFFFFFFFFFFFF & tid;
     let mut chars = vec![];
-    for _ in 1..13 {
+    for _ in 0..13 {
         chars.push(ALPHABET[(tid & 0x1F) as usize]);
         tid >>= 5;
     }
@@ -129,32 +129,35 @@ pub(crate) async fn update_profile(state: &Arc<AppState>, atproto_state: &AtProt
                 PutRecordResponse::Error(simple) => {
                     Err(anyhow!(simple.error_message()))?;
                 },
-                _ => {}
+                PutRecordResponse::StrongRef { uri, .. } => {
+                    log::info!("Updated site.standard.publication {}", uri);
+                }
             }
         },
         GetRecordResponse::Error(ref simple @ SimpleError { error: Some(ref error), .. })
             if let "InvalidRequest" | "RecordNotFound" = error.as_str() => {
-            // Record does not exist, we will attempt to create it
-
-            match create_record(
-                &client,
-                &auth,
-                atproto_state.config.base_url.as_str(),
-                CreateRecordRequest {
-                    repo: atproto_state.config.did.clone(),
-                    collection: "site.standard.publication".to_owned(),
-                    record_key: Some(publication_rkey.clone()),
-                    record: publication,
-                    swap_commit: None,
-                    validate: true
+                // Record does not exist, we will attempt to create it
+                match create_record(
+                    &client,
+                    &auth,
+                    atproto_state.config.base_url.as_str(),
+                    CreateRecordRequest {
+                        repo: atproto_state.config.did.clone(),
+                        collection: "site.standard.publication".to_owned(),
+                        record_key: Some(publication_rkey.clone()),
+                        record: publication,
+                        swap_commit: None,
+                        validate: true
+                    }
+                ).await? {
+                    CreateRecordResponse::Error(simple) => {
+                        Err(anyhow!(simple.error_message()))?;
+                    },
+                    CreateRecordResponse::StrongRef { uri, .. } => {
+                        log::info!("Created site.standard.publication {}", uri);
+                    }
                 }
-            ).await? {
-                CreateRecordResponse::Error(simple) => {
-                    Err(anyhow!(simple.error_message()))?;
-                },
-                _ => {}
             }
-        }
         GetRecordResponse::Error(simple) => {
             Err(anyhow!(simple.error_message()))?;
         }
@@ -240,7 +243,7 @@ pub(crate) async fn update_profile_blob(data: &Arc<AppState>, atproto_state: &At
                     .await?;
                 let blob = blob_object.blob;
 
-                sqlx::query("INSERT INTO atproto_blobs (content_hash. media_type, cid, size) VALUES (?, ?, ?, ?) ON CONFLICT (content_hash, media_type) DO UPDATE SET
+                sqlx::query("INSERT INTO atproto_blobs (content_hash, media_type, cid, size) VALUES (?, ?, ?, ?) ON CONFLICT (content_hash, media_type) DO UPDATE SET
                     cid = excluded.cid,
                     size = excluded.size")
                     .bind(hash)
