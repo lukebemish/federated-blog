@@ -1,7 +1,7 @@
 use std::{env, sync::Arc};
 
 use anyhow::anyhow;
-use atproto_client::{client::{AppPasswordAuth, Auth}, com::atproto::repo::{CreateRecordRequest, CreateRecordResponse, GetRecordResponse, PutRecordRequest, PutRecordResponse, create_record, get_record, put_record}, errors::SimpleError};
+use atproto_client::{client::{AppPasswordAuth, Auth}, com::atproto::{repo::{CreateRecordRequest, CreateRecordResponse, GetRecordResponse, PutRecordRequest, PutRecordResponse, create_record, get_record, put_record}, server::{AppPasswordSession, create_session, refresh_session}}, errors::SimpleError};
 use chrono::Utc;
 use futures::lock::Mutex;
 use rand::Rng;
@@ -12,14 +12,47 @@ use tokio::sync::OnceCell;
 
 use crate::{ActivityPubIcon, AppState, AtProtoAppState, Error, atproto::lexicon::{self, Blob}, reqwest_unsafe_client, types::utils::StableValue, with_slash};
 
-pub(crate) fn atproto_auth() -> Result<Option<Auth>, Error> {
+static SESSION_AUTH: OnceCell<Arc<Mutex<AppPasswordSession>>> = OnceCell::const_new();
+
+pub(crate) async fn session(atproto_state: &AtProtoAppState) -> Result<Auth, Error> {
+    let session_holder = SESSION_AUTH.get_or_try_init(|| async {
+        let client = reqwest_unsafe_client().await;
+
+        Ok::<Arc<Mutex<AppPasswordSession>>, anyhow::Error>(Arc::new(Mutex::new(create_session(
+            &client,
+            &atproto_state.config.base_url.as_str(),
+            &atproto_state.config.did,
+            &atproto_state.password,
+            None
+        ).await?)))
+    }).await?;
+
+    let mut held = session_holder.lock().await;
+    
+    let client = reqwest_unsafe_client().await;
+
+    let response = refresh_session(
+        &client,
+        &atproto_state.config.base_url.as_str(),
+        &held.refresh_jwt
+    ).await?;
+
+    held.did = response.did;
+    held.handle = response.handle;
+    held.access_jwt = response.access_jwt;
+    held.refresh_jwt = response.refresh_jwt;
+
+    Ok(Auth::AppPassword(AppPasswordAuth {
+        access_token: held.access_jwt.clone()
+    }))
+}
+
+pub(crate) fn atproto_password() -> Result<Option<String>, Error> {
     match env::var_os("ATPROTO_APP_PASSWORD") {
         None => Ok(None),
         Some(password) => {
             let password = password.into_string().map_err(|_| anyhow!("Not an error"))?;
-            Ok(Some(Auth::AppPassword(AppPasswordAuth {
-                access_token: password
-            })))
+            Ok(Some(password))
         }
     }
 }
@@ -46,9 +79,11 @@ pub(crate) fn generate_tid() -> String {
 }
 
 pub(crate) async fn update_profile(state: &Arc<AppState>, atproto_state: &AtProtoAppState) -> Result<String, Error> {
+    let auth = session(atproto_state).await?;
+
     let publication_rkey = &atproto_state.config.publication_rkey;
 
-    let icon_blob = update_profile_blob(state, atproto_state).await?;
+    let icon_blob = update_profile_blob(state, atproto_state, &auth).await?;
 
     let mut publication = atproto_state.config.publication.clone();
     if let Some(blob) = icon_blob {
@@ -59,7 +94,7 @@ pub(crate) async fn update_profile(state: &Arc<AppState>, atproto_state: &AtProt
 
     let record_result = get_record(
         &client,
-        &atproto_state.auth,
+        &auth,
         atproto_state.config.base_url.as_str(),
         &atproto_state.config.did,
         "site.standard.publication",
@@ -78,7 +113,7 @@ pub(crate) async fn update_profile(state: &Arc<AppState>, atproto_state: &AtProt
             }
             match put_record(
                 &client,
-                &atproto_state.auth,
+                &auth,
                 atproto_state.config.base_url.as_str(),
                 PutRecordRequest {
                     repo: atproto_state.config.did.clone(),
@@ -102,7 +137,7 @@ pub(crate) async fn update_profile(state: &Arc<AppState>, atproto_state: &AtProt
 
             match create_record(
                 &client,
-                &atproto_state.auth,
+                &auth,
                 atproto_state.config.base_url.as_str(),
                 CreateRecordRequest {
                     repo: atproto_state.config.did.clone(),
@@ -129,7 +164,7 @@ pub(crate) async fn update_profile(state: &Arc<AppState>, atproto_state: &AtProt
 
 static LAST_ETAG: OnceCell<Arc<Mutex<Option<String>>>> = OnceCell::const_new();
 
-pub(crate) async fn update_profile_blob(data: &Arc<AppState>, atproto_state: &AtProtoAppState) -> Result<Option<lexicon::Blob>, Error> {
+pub(crate) async fn update_profile_blob(data: &Arc<AppState>, atproto_state: &AtProtoAppState, auth: &Auth) -> Result<Option<lexicon::Blob>, Error> {
     if let Some(ActivityPubIcon { url, .. }) = &data.config.icon {
         let etag_holder = LAST_ETAG.get_or_init(|| async {
             Arc::new(Mutex::new(None))
@@ -186,7 +221,7 @@ pub(crate) async fn update_profile_blob(data: &Arc<AppState>, atproto_state: &At
                 }));
             }
 
-            if let Auth::AppPassword(password_auth) = &atproto_state.auth {
+            if let Auth::AppPassword(password_auth) = auth {
                 let blob: lexicon::Blob = client.post(
                     with_slash(&atproto_state.base_url)?.join("xrpc/com.atproto.repo.uploadBlob")?
                 ).bearer_auth(&password_auth.access_token)

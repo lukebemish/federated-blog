@@ -1,7 +1,6 @@
 use std::{collections::BTreeMap, fmt::{Debug, Display, Formatter}, fs::File, io::Read, path::Path, str::FromStr, sync::Arc, time::Duration};
 
 use activitypub_federation::config::{FederationConfig, FederationMiddleware};
-use atproto_client::client::Auth;
 use axum::{Router, http::{Method, StatusCode}, routing::{get, post}};
 use clap::Parser;
 use log::{LevelFilter, error, info};
@@ -13,7 +12,7 @@ use tokio::{sync::OnceCell, time::interval};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use url::{Host, Url};
 
-use crate::{atproto::indexer::{atproto_auth, generate_tid}, types::{objects::person::DbUser, utils::StableValue}};
+use crate::{atproto::indexer::{atproto_password, generate_tid}, types::{objects::person::DbUser, utils::StableValue}};
 
 mod types;
 mod indexer;
@@ -133,7 +132,7 @@ struct Cli {
 }
 
 pub(crate) struct AtProtoAppState {
-    auth: Auth,
+    password: String,
     base_url: Url,
     config: ConfigATProto,
 }
@@ -201,9 +200,9 @@ async fn main() -> Result<(), Error> {
     let config = read_config_from_file(&args.config)?;
 
     let state = Arc::new(AppState {
-        atproto_state: match (atproto_auth()?, &config.atproto) {
-            (Some(auth), Some(atproto_config)) => Some(AtProtoAppState {
-                auth,
+        atproto_state: match (atproto_password()?, &config.atproto) {
+            (Some(password), Some(atproto_config)) => Some(AtProtoAppState {
+                password,
                 base_url: atproto_config.base_url.clone(),
                 config: atproto_config.clone()
             }),
