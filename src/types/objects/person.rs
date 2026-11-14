@@ -1,11 +1,11 @@
-use crate::{AppState, Error, get_self_alias, types::{activities::{Follow, UndoFollow, UnknownActivity}, utils::DummyContext}, with_slash};
+use crate::{AppState, Error, get_self_alias, types::{activities::{Follow, UndoFollow, UnknownActivity}, utils::{DummyContext, StableValue}}, with_slash};
 use activitypub_federation::{
     config::Data, fetch::object_id::ObjectId, http_signatures::{Keypair, generate_actor_keypair}, kinds::actor::PersonType, protocol::{public_key::PublicKey, verification::verify_domains_match}, traits::{Activity, Actor, Object},
 };
 use anyhow::{anyhow};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json};
 use sqlx::Row;
 use std::{collections::{BTreeMap}, fmt::Debug, sync::Arc};
 use url::Url;
@@ -19,7 +19,7 @@ pub(crate) struct DbUser {
     pub(crate) shared_inbox: Option<Url>,
     pub(crate) public_key: String,
     last_refreshed_at: DateTime<Utc>,
-    pub(crate) extra: BTreeMap<String, Value>,
+    pub(crate) extra: BTreeMap<String, StableValue>,
     pub(crate) local: Option<LocalDbUser>,
 }
 
@@ -80,12 +80,12 @@ impl DbUser {
             followers: get_local_endpoint(state, LocalEndpoint::Followers)?,
             following: get_local_endpoint(state, LocalEndpoint::Following)?
         };
-        let mut values: BTreeMap<String, Value> = BTreeMap::from([
-            ("memorial".to_owned(), json!(false)),
-            ("discoverable".to_owned(), json!(true)),
-            ("indexable".to_owned(), json!(true)),
-            ("manuallyApprovesFollowers".to_owned(), json!(false)),
-            ("attributionDomains".to_owned(), json!(&state.config.attribution_domains)),
+        let mut values: BTreeMap<String, StableValue> = BTreeMap::from([
+            ("memorial".to_owned(), json!(false).into()),
+            ("discoverable".to_owned(), json!(true).into()),
+            ("indexable".to_owned(), json!(true).into()),
+            ("manuallyApprovesFollowers".to_owned(), json!(false).into()),
+            ("attributionDomains".to_owned(), json!(&state.config.attribution_domains).into()),
             ("attachment".to_owned(), json!([{
                 "type": "PropertyValue",
                 "name": "Web",
@@ -96,14 +96,14 @@ impl DbUser {
                     &state.config.homepage.host_str().unwrap_or(""),
                     &state.config.homepage.path(),
                 )
-            }]))
+            }]).into())
         ]);
-        values.insert("url".to_string(), json!(state.config.homepage.to_string()));
+        values.insert("url".to_string(), json!(state.config.homepage.to_string()).into());
         if let Some(icon) = state.config.icon.as_ref() {
-            values.insert("icon".to_string(), icon.clone());
+            values.insert("icon".to_string(), serde_json::to_value(&icon)?.into());
         }
         if let Some(image) = state.config.image.as_ref() {
-            values.insert("image".to_string(), image.clone());
+            values.insert("image".to_string(), serde_json::to_value(&image)?.into());
         }
         Ok(DbUser {
             username: state.config.username.to_string(),
@@ -182,7 +182,7 @@ pub(crate) struct Person {
     #[serde(skip_serializing, default, rename = "@context")]
     _context: DummyContext,
     #[serde(flatten)]
-    extra: BTreeMap<String, Value>
+    extra: BTreeMap<String, StableValue>
 }
 
 #[async_trait::async_trait]

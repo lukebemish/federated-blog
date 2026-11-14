@@ -3,11 +3,10 @@ use std::{collections::HashMap, sync::Arc};
 use activitypub_federation::{config::Data, fetch::object_id::ObjectId, kinds::object::ArticleType, protocol::verification::verify_domains_match, traits::Object};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use sqlx::Row;
 use url::Url;
 
-use crate::{AppState, Error, get_self_alias, types::{activities::Outbound, objects::person::{DbUser, LocalEndpoint, get_local_endpoint}, utils::DummyContext}};
+use crate::{AppState, Error, get_self_alias, types::{activities::Outbound, objects::person::{DbUser, LocalEndpoint, get_local_endpoint}, utils::{DummyContext, StableValue}}};
 
 #[derive(Debug, Clone)]
 pub(crate) struct DbLocalArticle {
@@ -17,18 +16,18 @@ pub(crate) struct DbLocalArticle {
     pub(crate) url: Url,
     pub(crate) to: Vec<Url>,
     pub(crate) cc: Vec<Url>,
-    pub(crate) extra: HashMap<String, Value>,
+    pub(crate) extra: HashMap<String, StableValue>,
 }
 
 impl DbLocalArticle {
-    pub(crate) async fn new_local(data: &Data<Arc<AppState>>, mut value: Value, ap_id: Url) -> Result<DbLocalArticle, Error> {
+    pub(crate) async fn new_local(data: &Data<Arc<AppState>>, mut value: StableValue, ap_id: Url) -> Result<DbLocalArticle, Error> {
         match &mut value {
-            Value::Object(map) => {
-                map.insert("to".to_owned(), Value::Array(vec![
-                    Value::String("https://www.w3.org/ns/activitystreams#Public".to_owned())
+            StableValue::Object(map) => {
+                map.insert("to".to_owned(), StableValue::Array(vec![
+                    StableValue::String("https://www.w3.org/ns/activitystreams#Public".to_owned())
                 ]));
-                map.insert("cc".to_owned(), Value::Array(vec![
-                    Value::String(get_local_endpoint(data, LocalEndpoint::Followers)?.to_string())
+                map.insert("cc".to_owned(), StableValue::Array(vec![
+                    StableValue::String(get_local_endpoint(data, LocalEndpoint::Followers)?.to_string())
                 ]));
             }
             _ => {}
@@ -38,7 +37,7 @@ impl DbLocalArticle {
         let existing = DbLocalArticle::read_from_id(ap_id.clone(), data).await?;
         match existing {
             None => {
-                let article = DbLocalArticle::from_json(serde_json::from_value(value)?, data).await?;
+                let article = DbLocalArticle::from_json(serde_json::from_value(value.into())?, data).await?;
                 Outbound::create_article(
                     data,
                     &article.attributed_to,
@@ -49,7 +48,7 @@ impl DbLocalArticle {
             },
             Some(old) => {
                 let old_json = DbLocalArticle::into_json(old.clone(), data).await?;
-                let new_json: LocalArticle = serde_json::from_value(value)?;
+                let new_json: LocalArticle = serde_json::from_value(value.into())?;
                 if old_json != new_json {
                     let article = DbLocalArticle::from_json(new_json, data).await?;
                     Outbound::modify_article(
@@ -83,7 +82,7 @@ pub(crate) struct LocalArticle {
     #[serde(skip_serializing, default, rename = "@context")]
     _context: DummyContext,
     #[serde(flatten)]
-    extra: HashMap<String, Value>
+    extra: HashMap<String, StableValue>
 }
 
 #[async_trait::async_trait]

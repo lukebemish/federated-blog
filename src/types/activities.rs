@@ -6,11 +6,10 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::future::join_all;
 use serde::{Deserialize, Serialize, Serializer, ser::{SerializeMap, SerializeSeq}};
-use serde_json::Value;
 use sqlx::Row;
 use url::Url;
 
-use crate::{AppState, Error, default_context, types::{activities::Outbound::{AcceptFollow, CreateArticle, ModifyArticle}, objects::{article::LocalArticle, person::DbUser}}};
+use crate::{AppState, Error, default_context, types::{activities::Outbound::{AcceptFollow, CreateArticle, ModifyArticle}, objects::{article::LocalArticle, person::DbUser}, utils::StableValue}};
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -21,7 +20,7 @@ pub(crate) struct Follow {
     pub(crate) kind: FollowType,
     pub(crate) id: Url,
     #[serde(flatten)]
-    pub(crate) extra: BTreeMap<String, Value>
+    pub(crate) extra: BTreeMap<String, StableValue>
 }
 
 #[async_trait]
@@ -117,7 +116,7 @@ pub(crate) struct UnknownActivity {
     pub(crate) kind: String,
     pub(crate) id: Url,
     #[serde(flatten)]
-    pub(crate) extra: BTreeMap<String, Value>
+    pub(crate) extra: BTreeMap<String, StableValue>
 }
 
 #[async_trait]
@@ -352,7 +351,7 @@ pub(crate) async fn submit_outbound(data: &Data<Arc<AppState>>, outbound: Outbou
         return Err(Error::Simple(anyhow!("Cannot send activity for non-local actor {}", actor.ap_id.inner().as_str())))
     }
 
-    queue_activity(&WithContext::new(outbound, default_context()), &actor, inboxes, &data).await?;
+    queue_activity(&WithContext::new(outbound, default_context().into()), &actor, inboxes, &data).await?;
 
     Ok(())
 }

@@ -1,24 +1,26 @@
-use std::{fmt::{Debug, Display, Formatter}, fs::File, io::Read, path::Path, str::FromStr, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, fmt::{Debug, Display, Formatter}, fs::File, io::Read, path::Path, str::FromStr, sync::Arc, time::Duration};
 
 use activitypub_federation::config::{FederationConfig, FederationMiddleware};
+use atproto_client::client::Auth;
 use axum::{Router, http::{Method, StatusCode}, routing::{get, post}};
 use clap::Parser;
 use log::{LevelFilter, error, info};
 use reqwest_ssrf_guard::Acl;
-use serde::Deserialize;
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
+use serde_json::{json};
 use sqlx::{Pool, Sqlite, sqlite::{SqliteConnectOptions, SqlitePoolOptions}};
 use tokio::{sync::OnceCell, time::interval};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use url::{Host, Url};
 
-use crate::types::objects::person::DbUser;
+use crate::{atproto::indexer::{atproto_auth, generate_tid}, types::{objects::person::DbUser, utils::StableValue}};
 
 mod types;
 mod indexer;
 mod http;
+mod atproto;
 
-fn default_context() -> Value {
+fn default_context() -> StableValue {
     json!([
         "https://www.w3.org/ns/activitystreams",
         "https://w3id.org/security/v1",
@@ -33,7 +35,7 @@ fn default_context() -> Value {
             "PropertyValue": "schema:PropertyValue",
             "value": "schema:value"
         }
-    ])
+    ]).into()
 }
 
 fn get_self_alias(state: &AppState) -> Result<Url, url::ParseError> {
@@ -90,6 +92,14 @@ impl TryFrom<Url> for HostUrl {
     }
 }
 
+#[derive(Deserialize, Debug, Clone)]
+struct ConfigATProto {
+    base_url: Url,
+    publication_rkey: String,
+    publication: atproto::lexicon::SiteStandardPublication,
+    did: String
+}
+
 #[derive(Deserialize, Debug)]
 struct Config {
     port: u16,
@@ -98,22 +108,40 @@ struct Config {
     homepage: Url,
     #[serde(default)]
     attribution_domains: Vec<String>,
-    icon: Option<Value>,
-    image: Option<Value>,
+    icon: Option<ActivityPubIcon>,
+    image: Option<ActivityPubIcon>,
     name: String,
-    posts: Url
+    posts: Url,
+    atproto: Option<ConfigATProto>
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct ActivityPubIcon {
+    url: Url,
+    #[serde(flatten)]
+    extra: BTreeMap<String, StableValue>
 }
 
 #[derive(Parser)]
 struct Cli {
     config: std::path::PathBuf,
     #[arg(long)]
-    dev: bool
+    dev: bool,
+    #[arg(long)]
+    tid: bool
+}
+
+pub(crate) struct AtProtoAppState {
+    auth: Auth,
+    base_url: Url,
+    config: ConfigATProto,
 }
 
 pub(crate) struct AppState {
     config: Config,
-    database: Pool<Sqlite>
+    database: Pool<Sqlite>,
+    atproto_state: Option<AtProtoAppState>
 }
 
 fn read_config_from_file<P: AsRef<Path>>(path: P) -> Result<Config, tokio::io::Error> {
@@ -161,6 +189,10 @@ async fn main() -> Result<(), Error> {
 
     let args = args().await;
 
+    if (args.tid) {
+        log::info!("New TID (Not used for anything): {}", generate_tid());
+    }
+
     let conn = db_conn().await;
     sqlx::migrate!()
         .run(&conn)
@@ -169,6 +201,14 @@ async fn main() -> Result<(), Error> {
     let config = read_config_from_file(&args.config)?;
 
     let state = Arc::new(AppState {
+        atproto_state: match (atproto_auth()?, &config.atproto) {
+            (Some(auth), Some(atproto_config)) => Some(AtProtoAppState {
+                auth,
+                base_url: atproto_config.base_url.clone(),
+                config: atproto_config.clone()
+            }),
+            _ => None
+        },
         config: config,
         database: conn
     });
@@ -306,6 +346,21 @@ async fn reqwest_client() -> reqwest_middleware::ClientWithMiddleware {
             acl
                 .configure_middleware(reqwest_middleware::ClientBuilder::new(inner))              // validate_url on every request
                 .build()
+        }
+    }).await.clone()
+}
+
+static LEGACY_CLIENT: tokio::sync::OnceCell<reqwest_old::Client> = OnceCell::const_new();
+
+async fn reqwest_unsafe_client() -> reqwest_old::Client {
+    LEGACY_CLIENT.get_or_init(|| async {
+        if args().await.dev {
+            reqwest_old::Client::new()
+        } else {
+            reqwest_old::Client::builder()
+                .no_proxy()
+                .https_only(true)
+                .build().unwrap()
         }
     }).await.clone()
 }

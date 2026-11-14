@@ -5,9 +5,8 @@ use axum::{Json, debug_handler, extract::{Path, Query}, http::HeaderMap, respons
 use log::error;
 use reqwest::{StatusCode, header::ACCEPT};
 use serde::Deserialize;
-use serde_json::Value;
 
-use crate::{AppState, Error, default_context, get_self_alias, types::{activities::{count_followers, count_outbox_for, get_followers_from, get_outbound, get_outbox_for}, collections::LocalUserOwnedCollection, objects::{article::DbLocalArticle, person::{DbUser, PersonAcceptedActivities}}}, with_slash};
+use crate::{AppState, Error, default_context, get_self_alias, types::{activities::{count_followers, count_outbox_for, get_followers_from, get_outbound, get_outbox_for}, collections::LocalUserOwnedCollection, objects::{article::DbLocalArticle, person::{DbUser, PersonAcceptedActivities}}, utils::StableValue}, with_slash};
 
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
@@ -42,11 +41,11 @@ pub(crate) async fn http_get_user(
     match db_user {
         None => Err(Error::Status(StatusCode::NOT_FOUND)),
         Some(user) => {
-            if let Some(Value::String(url)) = user.extra.get("url") && should_serve_html(headers) {
+            if let Some(StableValue::String(url)) = user.extra.get("url") && should_serve_html(headers) {
                 return Ok(Redirect::to(url).into_response());
             }
             let json_user = user.into_json(&data).await?;
-            Ok(FederationJson(WithContext::new(json_user, default_context())).into_response())
+            Ok(FederationJson(WithContext::new(json_user, default_context().into())).into_response())
         }
     }
 }
@@ -68,7 +67,7 @@ pub(crate) async fn http_get_article(
                 return Ok(Redirect::to(local_article.url.as_str()).into_response());
             }
             let json_local_article = local_article.into_json(&data).await?;
-            Ok(FederationJson(WithContext::new(json_local_article, default_context())).into_response())
+            Ok(FederationJson(WithContext::new(json_local_article, default_context().into())).into_response())
         }
     }
 }
@@ -108,7 +107,7 @@ pub(crate) async fn http_get_user_outbox(
             10,
             async |start, limit| get_outbox_for(&data, &user.ap_id, start, limit).await
         ).await?;
-        Ok(FederationJson(WithContext::new(outbox, default_context())))
+        Ok(FederationJson(WithContext::new(outbox, default_context().into())))
     } else {
         Err(Error::Status(StatusCode::NOT_FOUND))
     }
@@ -130,7 +129,7 @@ pub(crate) async fn http_get_user_followers(
             async |start, limit| Ok(get_followers_from(&data, &user.ap_id, start, limit).await?
                 .into_iter().map(|id| id.into_inner()).collect())
         ).await?;
-        Ok(FederationJson(WithContext::new(outbox, default_context())))
+        Ok(FederationJson(WithContext::new(outbox, default_context().into())))
     } else {
         Err(Error::Status(StatusCode::NOT_FOUND))
     }
@@ -151,7 +150,7 @@ pub(crate) async fn http_get_user_following(
             10,
             async |_, _| Ok(vec![])
         ).await?;
-        Ok(FederationJson(WithContext::new(outbox, default_context())))
+        Ok(FederationJson(WithContext::new(outbox, default_context().into())))
     } else {
         Err(Error::Status(StatusCode::NOT_FOUND))
     }
@@ -165,7 +164,7 @@ pub(crate) async fn http_get_outbound_activity(
     let outbound = get_outbound(&data, &id_part).await?;
     match outbound {
         None => Err(Error::Status(StatusCode::NOT_FOUND)),
-        Some(activity) => Ok(FederationJson(WithContext::new(activity, default_context())))
+        Some(activity) => Ok(FederationJson(WithContext::new(activity, default_context().into())))
     }
 }
 
