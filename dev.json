@@ -9,13 +9,5 @@
         "mediaType": "image/webp",
         "url": "http://localhost:4000/assets/img/profile.webp"
     },
-    "name": "Luke Bemish — Blog",
-    "atproto_publication": {
-        "$type": "site.standard.publication",
-        "url": "http://localhost:4000/",
-        "name": "Luke Bemish — Blog",
-        "preferences": {
-            "showInDiscover": true
-        }
-    }
+    "name": "Luke Bemish — Blog"
 }
