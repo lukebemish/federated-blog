@@ -1,5 +1,38 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, ser::SerializeMap};
 use url::Url;
+
+use crate::types::utils::StableValue;
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(try_from = "String")]
+pub(crate) struct SiteStandardDocumentType();
+impl Serialize for SiteStandardDocumentType { fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str("site.standard.document")
+}}
+impl TryFrom<String> for SiteStandardDocumentType { type Error = String; fn try_from(value: String) -> Result<Self, Self::Error> {
+    const EXPECT: &str = "site.standard.document";
+    if value == EXPECT { Ok(Default::default()) } else { Err(format!("Expected {}", EXPECT)) }
+}}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SiteStandardDocument {
+    #[serde(rename = "$type")]
+    pub(crate) kind: SiteStandardDocumentType,
+    pub(crate) site: String,
+    pub(crate) path: String,
+    pub(crate) title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) cover_image: Option<Blob>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) content: Option<StableValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) text_content: Option<String>,
+    pub(crate) published_at: DateTime<Utc>
+}
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(try_from = "String")]

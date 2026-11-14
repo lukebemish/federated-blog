@@ -2,16 +2,18 @@ use std::{env, sync::Arc};
 
 use anyhow::anyhow;
 use atproto_client::{client::{AppPasswordAuth, Auth}, com::atproto::{repo::{CreateRecordRequest, CreateRecordResponse, GetRecordResponse, PutRecordRequest, PutRecordResponse, create_record, get_record, put_record}, server::{AppPasswordSession, create_session, refresh_session}}, errors::SimpleError};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use futures::lock::Mutex;
 use rand::Rng;
 use reqwest::header::{CONTENT_LENGTH, CONTENT_TYPE, ETAG};
 use serde::Deserialize;
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use sqlx::Row;
 use tokio::sync::OnceCell;
+use xxhash_rust::xxh32::xxh32;
 
-use crate::{ActivityPubIcon, AppState, AtProtoAppState, Error, atproto::lexicon::{self, Blob}, reqwest_unsafe_client, types::utils::StableValue, with_slash};
+use crate::{ActivityPubIcon, AppState, AtProtoAppState, Error, atproto::lexicon::{self, Blob, SiteStandardDocument, SiteStandardDocumentType}, reqwest_unsafe_client, types::{objects::article::DbLocalArticle, utils::StableValue}, with_slash};
 
 static SESSION_AUTH: OnceCell<Arc<Mutex<AppPasswordSession>>> = OnceCell::const_new();
 
@@ -79,12 +81,146 @@ pub(crate) fn generate_tid() -> String {
     chars.iter().collect()
 }
 
-pub(crate) async fn update_profile(state: &Arc<AppState>, atproto_state: &AtProtoAppState) -> Result<String, Error> {
-    let auth = session(atproto_state).await?;
+pub(crate) fn calculate_tid(date: &DateTime<Utc>, id_path: &String) -> String {
+    let micro = date.timestamp_micros();
+    let clock_id = xxh32(id_path.as_bytes(), 0) as i64;
+    let mut tid = (
+        micro << 10
+    ) | (
+        clock_id & 0x3FF
+    );
+    tid = 0x1FFFFFFFFFFFFF & tid;
+    let mut chars = vec![];
+    for _ in 0..13 {
+        chars.push(ALPHABET[(tid & 0x1F) as usize]);
+        tid >>= 5;
+    }
+    chars.reverse();
+    chars.iter().collect()
+}
 
+pub(crate) async fn update_article(_state: &Arc<AppState>, atproto_state: &AtProtoAppState, auth: &Auth, id_path: &String, article: &DbLocalArticle, publication_rkey: &String) -> Result<(), Error> {
+    let published = match article.extra.get("published").and_then(|s| {
+        let o = match s {
+            StableValue::String(s) => DateTime::parse_from_rfc3339(s).ok().map(|d| d.to_utc()),
+            _ => None,
+        };
+        if o.is_none() {
+            log::warn!("Article {} has a 'published' date but it does not seem to be a valid date-time: {:?}", id_path, s);
+        }
+        o
+    }) {
+        None => {
+            log::warn!("Cannot federated article {} without valid published date to AT Protocol; impossible to calculate a stable TID rkey", id_path);
+            return Ok(());
+        },
+        Some(d) => d
+    };
+    let content = match article.extra.get("content").and_then(|c| match c {
+        StableValue::String(s) => Some(s),
+        _ => None
+    }) {
+        None => {
+            log::warn!("Cannot federated article {} without string content", id_path);
+            return Ok(());
+        },
+        Some(c) => c
+    };
+    let tid = calculate_tid(&published, id_path);
+    let document = SiteStandardDocument {
+        kind: SiteStandardDocumentType(),
+        site: format!("at://{}/site.standard.publication/{}", atproto_state.config.did, publication_rkey),
+        path: id_path.to_owned(),
+        description: None,
+        cover_image: None,
+        text_content: None,
+        published_at: published,
+        title: article.name.clone(),
+        content: Some(json!({
+            "$type": "org.wordpress.html",
+            "html": content.clone()
+        }).into())
+    };
+
+    let client = reqwest_unsafe_client().await;
+
+    let record_result = get_record(
+        &client,
+        &auth,
+        atproto_state.config.base_url.as_str(),
+        &atproto_state.config.did,
+        "site.standard.document",
+        &tid,
+        None
+    ).await?;
+
+    match record_result {
+        GetRecordResponse::Record {
+            value, ..
+        } => {
+            let old_value: StableValue = serde_json::from_value(value)?;
+            let new_value: StableValue = serde_json::to_value(document)?.into();
+            if old_value == new_value {
+                return Ok(());
+            }
+            match put_record(
+                &client,
+                &auth,
+                atproto_state.config.base_url.as_str(),
+                PutRecordRequest {
+                    repo: atproto_state.config.did.clone(),
+                    collection: "site.standard.document".to_owned(),
+                    record_key: tid.clone(),
+                    record: new_value,
+                    swap_commit: None,
+                    swap_record: None,
+                    validate: true
+                }
+            ).await? {
+                PutRecordResponse::Error(simple) => {
+                    Err(anyhow!(simple.error_message()))?;
+                },
+                PutRecordResponse::StrongRef { uri, .. } => {
+                    log::info!("Updated site.standard.document {}", uri);
+                }
+            }
+        },
+        GetRecordResponse::Error(ref simple @ SimpleError { error: Some(ref error), .. })
+            if let "InvalidRequest" | "RecordNotFound" = error.as_str() => {
+                // Record does not exist, we will attempt to create it
+                match create_record(
+                    &client,
+                    &auth,
+                    atproto_state.config.base_url.as_str(),
+                    CreateRecordRequest {
+                        repo: atproto_state.config.did.clone(),
+                        collection: "site.standard.document".to_owned(),
+                        record_key: Some(tid.clone()),
+                        record: document,
+                        swap_commit: None,
+                        validate: true
+                    }
+                ).await? {
+                    CreateRecordResponse::Error(simple) => {
+                        Err(anyhow!(simple.error_message()))?;
+                    },
+                    CreateRecordResponse::StrongRef { uri, .. } => {
+                        log::info!("Created site.standard.document {}", uri);
+                    }
+                }
+            }
+        GetRecordResponse::Error(simple) => {
+            Err(anyhow!(simple.error_message()))?;
+        }
+    }
+
+    Ok(())
+}
+
+pub(crate) async fn update_profile(state: &Arc<AppState>, atproto_state: &AtProtoAppState, auth: &Auth) -> Result<String, Error> {
     let publication_rkey = &atproto_state.config.publication_rkey;
 
-    let icon_blob = update_profile_blob(state, atproto_state, &auth).await?;
+    let icon_blob = update_profile_blob(state, atproto_state, &auth, publication_rkey).await?;
 
     let mut publication = atproto_state.config.publication.clone();
     if let Some(blob) = icon_blob {
@@ -168,7 +304,7 @@ pub(crate) async fn update_profile(state: &Arc<AppState>, atproto_state: &AtProt
 
 static LAST_ETAG: OnceCell<Arc<Mutex<Option<String>>>> = OnceCell::const_new();
 
-pub(crate) async fn update_profile_blob(data: &Arc<AppState>, atproto_state: &AtProtoAppState, auth: &Auth) -> Result<Option<lexicon::Blob>, Error> {
+pub(crate) async fn update_profile_blob(data: &Arc<AppState>, atproto_state: &AtProtoAppState, auth: &Auth, publication_rkey: &String) -> Result<Option<lexicon::Blob>, Error> {
     if let Some(ActivityPubIcon { url, .. }) = &data.config.icon {
         let etag_holder = LAST_ETAG.get_or_init(|| async {
             Arc::new(Mutex::new(None))
@@ -208,9 +344,10 @@ pub(crate) async fn update_profile_blob(data: &Arc<AppState>, atproto_state: &At
             hasher.update(&bytes);
 
             let hash: &[u8] = &hasher.finalize();
-            let existing: Option<(String, u32)> = sqlx::query("SELECT cid, size FROM atproto_blobs WHERE content_hash = ? AND media_type = ?")
+            let existing: Option<(String, u32)> = sqlx::query("SELECT cid, size FROM atproto_blobs WHERE content_hash = ? AND media_type = ? AND rkey = ?")
                 .bind(hash)
                 .bind(&media_type)
+                .bind(publication_rkey)
                 .fetch_optional(&data.database)
                 .await.map(|row| {
                     row.map(|row| (row.get("cid"), row.get("size")))
@@ -243,9 +380,12 @@ pub(crate) async fn update_profile_blob(data: &Arc<AppState>, atproto_state: &At
                     .await?;
                 let blob = blob_object.blob;
 
-                sqlx::query("INSERT INTO atproto_blobs (content_hash, media_type, cid, size) VALUES (?, ?, ?, ?) ON CONFLICT (content_hash, media_type) DO UPDATE SET
+                sqlx::query("INSERT INTO atproto_blobs (rkey, content_hash, media_type, cid, size) VALUES (?, ?, ?, ?, ?) ON CONFLICT (rkey) DO UPDATE SET
+                    content_hash = excluded.content_hash,
+                    media_type = excluded.media_type,
                     cid = excluded.cid,
                     size = excluded.size")
+                    .bind(publication_rkey)
                     .bind(hash)
                     .bind(&media_type)
                     .bind(&blob.blob_ref)
