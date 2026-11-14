@@ -5,7 +5,8 @@ use atproto_client::{client::{AppPasswordAuth, Auth}, com::atproto::{repo::{Crea
 use chrono::Utc;
 use futures::lock::Mutex;
 use rand::Rng;
-use reqwest::header::{CONTENT_TYPE, ETAG};
+use reqwest::header::{CONTENT_LENGTH, CONTENT_TYPE, ETAG};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use sqlx::Row;
 use tokio::sync::OnceCell;
@@ -222,16 +223,22 @@ pub(crate) async fn update_profile_blob(data: &Arc<AppState>, atproto_state: &At
             }
 
             if let Auth::AppPassword(password_auth) = auth {
-                let blob: lexicon::Blob = client.post(
+                #[derive(Deserialize)]
+                struct BlobObject {
+                    blob: lexicon::Blob
+                }
+                let blob_object: BlobObject = client.post(
                     with_slash(&atproto_state.base_url)?.join("xrpc/com.atproto.repo.uploadBlob")?
                 ).bearer_auth(&password_auth.access_token)
                     .header(CONTENT_TYPE, &media_type)
+                    .header(CONTENT_LENGTH, bytes.len())
                     .body(bytes)
                     .send()
                     .await?
                     .error_for_status()?
                     .json()
                     .await?;
+                let blob = blob_object.blob;
 
                 sqlx::query("INSERT INTO atproto_blobs (content_hash. media_type, cid, size) VALUES (?, ?, ?, ?) ON CONFLICT (content_hash, media_type) DO UPDATE SET
                     cid = excluded.cid,
