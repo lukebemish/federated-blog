@@ -8,9 +8,7 @@ ARG APP_NAME
 
 WORKDIR /app
 
-RUN apk add --no-cache clang lld musl-dev git openssl-dev
-
-ENV OPENSSL_NO_VENDOR=1
+RUN apk add --no-cache clang lld musl-dev git openssl-dev openssl-libs-static
 
 RUN --mount=type=bind,source=src,target=src \
     --mount=type=bind,source=Cargo.toml,target=Cargo.toml \
@@ -22,8 +20,6 @@ RUN --mount=type=bind,source=src,target=src \
     cp ./target/release/federated-blog /bin/federated-blog
 
 FROM docker.io/library/alpine:3.18 AS final
-
-RUN apk add --no-cache openssl ca-certificates
 
 ARG UID=10001
 RUN adduser \

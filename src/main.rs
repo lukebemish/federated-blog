@@ -189,7 +189,7 @@ async fn main() -> Result<(), Error> {
 
     let args = args().await;
 
-    if (args.tid) {
+    if args.tid {
         log::info!("New TID (Not used for anything): {}", generate_tid());
     }
 
