@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize, Serializer, ser::SerializeMap};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, ser::SerializeMap};
 use url::Url;
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -97,7 +97,7 @@ pub(crate) struct Blob {
     pub(crate) kind: BlobType,
     pub(crate) mime_type: String,
     pub(crate) size: u32,
-    #[serde(serialize_with = "ref_as_link", rename = "ref")]
+    #[serde(serialize_with = "ref_as_link", deserialize_with = "link_as_ref", rename = "ref")]
     pub(crate) blob_ref: String,
 }
 
@@ -107,4 +107,17 @@ fn ref_as_link<S>(s: &String, serializer: S) -> Result<S::Ok, S::Error>
     let mut map = serializer.serialize_map(Some(1))?;
     map.serialize_entry("$link", &s)?;
     map.end()
+}
+
+fn link_as_ref<'de, D>(deserializer: D) -> Result<String, D::Error>
+    where
+        D: Deserializer<'de>
+{
+    #[derive(Deserialize)]
+    struct BlobLink {
+        #[serde(rename = "$link")]
+        link: String
+    }
+
+    BlobLink::deserialize(deserializer).map(|it| it.link)
 }
