@@ -13,7 +13,7 @@ use sqlx::Row;
 use tokio::sync::OnceCell;
 use xxhash_rust::xxh32::xxh32;
 
-use crate::{ActivityPubIcon, AppState, AtProtoAppState, Error, atproto::lexicon::{self, Blob, SiteStandardDocument, SiteStandardDocumentType}, reqwest_unsafe_client, types::{objects::article::DbLocalArticle, utils::StableValue}, with_slash};
+use crate::{ActivityPubIcon, AppState, AtProtoAppState, Error, atproto::lexicon::{self, Blob, SiteStandardDocument, SiteStandardDocumentType}, html, reqwest_unsafe_client, types::{objects::article::DbLocalArticle, utils::StableValue}, with_slash};
 
 static SESSION_AUTH: OnceCell<Arc<Mutex<AppPasswordSession>>> = OnceCell::const_new();
 
@@ -126,12 +126,19 @@ pub(crate) async fn update_article(_state: &Arc<AppState>, atproto_state: &AtPro
         },
         Some(c) => c
     };
+    let summary = match article.extra.get("summary").and_then(|c| match c {
+        StableValue::String(s) => Some(s),
+        _ => None
+    }) {
+        None => None,
+        Some(html) => Some(html::strip_tags(html)?)
+    };
     let tid = calculate_tid(&published, id_path);
     let document = SiteStandardDocument {
         kind: SiteStandardDocumentType(),
         site: format!("at://{}/site.standard.publication/{}", atproto_state.config.did, publication_rkey),
         path: id_path.to_owned(),
-        description: None,
+        description: summary,
         cover_image: None,
         text_content: None,
         published_at: published,

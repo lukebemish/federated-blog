@@ -18,6 +18,7 @@ mod types;
 mod indexer;
 mod http;
 mod atproto;
+mod html;
 
 fn default_context() -> StableValue {
     json!([
