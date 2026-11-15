@@ -252,6 +252,7 @@ pub(crate) async fn update_profile(state: &Arc<AppState>, atproto_state: &AtProt
         } => {
             let old_value: StableValue = serde_json::from_value(value)?;
             let new_value: StableValue = serde_json::to_value(publication)?.into();
+            log::info!("{:?}", serde_json::to_string(&new_value));
             if old_value == new_value {
                 return Ok(publication_rkey.to_owned())
             }
