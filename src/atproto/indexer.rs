@@ -1,7 +1,7 @@
 use std::{env, sync::Arc};
 
 use anyhow::anyhow;
-use atproto_client::{client::{AppPasswordAuth, Auth}, com::atproto::{repo::{CreateRecordRequest, CreateRecordResponse, GetRecordResponse, PutRecordRequest, PutRecordResponse, create_record, get_record, put_record}, server::{AppPasswordSession, create_session, refresh_session}}, errors::SimpleError};
+use atproto_client::{client::{AppPasswordAuth, Auth}, com::atproto::{repo::{CreateRecordRequest, CreateRecordResponse, GetRecordResponse, PutRecordRequest, PutRecordResponse, create_record, get_blob, get_record, put_record}, server::{AppPasswordSession, create_session, refresh_session}}, errors::SimpleError};
 use chrono::{DateTime, Utc};
 use futures::lock::Mutex;
 use rand::Rng;
@@ -361,12 +361,25 @@ pub(crate) async fn update_profile_blob(data: &Arc<AppState>, atproto_state: &At
                 })?;
 
             if let Some(existing) = existing {
-                return Ok(Some(Blob {
-                    kind: Default::default(),
-                    mime_type: media_type,
-                    size: existing.1,
-                    blob_ref: existing.0
-                }));
+                let blob_ref = existing.0;
+                match get_blob(
+                    &client,
+                    atproto_state.config.base_url.as_str(),
+                    &atproto_state.config.did,
+                    &blob_ref
+                ).await {
+                    Ok(_) => {
+                        return Ok(Some(Blob {
+                            kind: Default::default(),
+                            mime_type: media_type,
+                            size: existing.1,
+                            blob_ref
+                        }));
+                    },
+                    Err(e) => {
+                        log::error!("Error fetching cached blob: {}", e);
+                    }
+                }
             }
 
             if let Auth::AppPassword(password_auth) = auth {
