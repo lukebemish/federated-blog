@@ -13,7 +13,7 @@ use sqlx::Row;
 use tokio::sync::OnceCell;
 use xxhash_rust::xxh32::xxh32;
 
-use crate::{ActivityPubIcon, AppState, AtProtoAppState, Error, atproto::lexicon::{self, Blob, SiteStandardDocument, SiteStandardDocumentType}, html, reqwest_unsafe_client, types::{objects::article::DbLocalArticle, utils::StableValue}, with_slash};
+use crate::{ActivityPubIcon, AppState, AtProtoAppState, Error, atproto::lexicon::{self, Blob, SiteStandardDocument, SiteStandardDocumentType, SiteStandardPublication}, html, reqwest_unsafe_client, types::{objects::article::DbLocalArticle, utils::StableValue}, with_slash};
 
 static SESSION_AUTH: OnceCell<Arc<Mutex<AppPasswordSession>>> = OnceCell::const_new();
 
@@ -250,9 +250,12 @@ pub(crate) async fn update_profile(state: &Arc<AppState>, atproto_state: &AtProt
         GetRecordResponse::Record {
             value, ..
         } => {
+            let old_publication: SiteStandardPublication = serde_json::from_value(value.clone())?;
+            if let Some(blob) = old_publication.icon && let None = publication.icon {
+                publication.icon = Some(blob);
+            }
             let old_value: StableValue = serde_json::from_value(value)?;
             let new_value: StableValue = serde_json::to_value(publication)?.into();
-            log::info!("{:?}", serde_json::to_string(&new_value));
             if old_value == new_value {
                 return Ok(publication_rkey.to_owned())
             }
@@ -362,25 +365,12 @@ pub(crate) async fn update_profile_blob(data: &Arc<AppState>, atproto_state: &At
                 })?;
 
             if let Some(existing) = existing {
-                let blob_ref = existing.0;
-                match get_blob(
-                    &client,
-                    atproto_state.config.base_url.as_str(),
-                    &atproto_state.config.did,
-                    &blob_ref
-                ).await {
-                    Ok(_) => {
-                        return Ok(Some(Blob {
-                            kind: Default::default(),
-                            mime_type: media_type,
-                            size: existing.1,
-                            blob_ref
-                        }));
-                    },
-                    Err(e) => {
-                        log::error!("Error fetching cached blob: {}", e);
-                    }
-                }
+                return Ok(Some(Blob {
+                    kind: Default::default(),
+                    mime_type: media_type,
+                    size: existing.1,
+                    blob_ref: existing.0
+                }));
             }
 
             if let Auth::AppPassword(password_auth) = auth {
