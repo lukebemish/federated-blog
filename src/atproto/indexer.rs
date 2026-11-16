@@ -1,7 +1,7 @@
 use std::{env, sync::Arc};
 
 use anyhow::anyhow;
-use atproto_client::{client::{AppPasswordAuth, Auth}, com::atproto::{repo::{CreateRecordRequest, CreateRecordResponse, GetRecordResponse, PutRecordRequest, PutRecordResponse, create_record, get_blob, get_record, put_record}, server::{AppPasswordSession, create_session, refresh_session}}, errors::SimpleError};
+use atproto_client::{client::{AppPasswordAuth, Auth}, com::atproto::{repo::{CreateRecordRequest, CreateRecordResponse, GetRecordResponse, PutRecordRequest, PutRecordResponse, create_record, get_record, put_record}, server::{AppPasswordSession, create_session, refresh_session}}, errors::SimpleError};
 use chrono::{DateTime, Utc};
 use futures::lock::Mutex;
 use rand::Rng;
