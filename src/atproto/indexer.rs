@@ -133,6 +133,26 @@ pub(crate) async fn update_article(_state: &Arc<AppState>, atproto_state: &AtPro
         None => None,
         Some(html) => Some(html::strip_tags(html)?)
     };
+
+    let text_content = html::strip_tags(&content)?;
+
+    let tags: Option<Vec<String>> = article.extra.get("tag").and_then(|v| match v {
+        StableValue::Array(tags) => Some(tags.iter().flat_map(|t| match t {
+            StableValue::Object(t) => match (t.get("type"), t.get("name")) {
+                (Some(StableValue::String(s)), Some(StableValue::String(tag))) if s == "Hashtag" => {
+                    if tag.starts_with("#") {
+                        Some(tag[1..].to_owned())
+                    } else {
+                        None
+                    }
+                },
+                _ => None
+            }.into_iter(),
+            _ => None.into_iter()
+        }).collect()),
+        _ => None
+    });
+
     let tid = calculate_tid(&published, id_path);
     let document = SiteStandardDocument {
         kind: SiteStandardDocumentType(),
@@ -140,13 +160,14 @@ pub(crate) async fn update_article(_state: &Arc<AppState>, atproto_state: &AtPro
         path: id_path.to_owned(),
         description: summary,
         cover_image: None,
-        text_content: None,
+        text_content: Some(text_content),
         published_at: published,
         title: article.name.clone(),
         content: Some(json!({
             "$type": "org.wordpress.html",
             "html": content.clone()
-        }).into())
+        }).into()),
+        tags: tags
     };
 
     let client = reqwest_unsafe_client().await;

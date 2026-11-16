@@ -1278,9 +1278,11 @@ dependencies = [
  "enum_delegate",
  "env_logger",
  "futures",
+ "html-escape",
  "log",
  "lol_html",
  "rand 0.10.3",
+ "regex",
  "reqwest 0.12.28",
  "reqwest 0.13.5",
  "reqwest-middleware 0.5.2",
@@ -1674,6 +1676,12 @@ checksum = "6303bc9732ae41b04cb554b844a762b4115a61bfaa81e3e83050991eeb56863f"
 dependencies = [
  "digest 0.11.3",
 ]
+
+[[package]]
+name = "html-escape"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d45ed4d99334da2a2f221504e8ffc8ad09baf2a452b154465a976bfde697b004"
 
 [[package]]
 name = "http"

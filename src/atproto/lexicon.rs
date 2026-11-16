@@ -31,7 +31,8 @@ pub(crate) struct SiteStandardDocument {
     pub(crate) content: Option<StableValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) text_content: Option<String>,
-    pub(crate) published_at: DateTime<Utc>
+    pub(crate) published_at: DateTime<Utc>,
+    pub(crate) tags: Option<Vec<String>>
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
