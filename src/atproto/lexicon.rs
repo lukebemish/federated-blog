@@ -96,10 +96,10 @@ pub(crate) struct BasicTheme {
 #[serde(try_from = "String")]
 pub(crate) struct BasicThemeRgbType();
 impl Serialize for BasicThemeRgbType { fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-    serializer.serialize_str("site.standard.theme.basic#rgb")
+    serializer.serialize_str("site.standard.theme.color#rgb")
 }}
 impl TryFrom<String> for BasicThemeRgbType { type Error = String; fn try_from(value: String) -> Result<Self, Self::Error> {
-    const EXPECT: &str = "site.standard.theme.basic#rgb";
+    const EXPECT: &str = "site.standard.theme.color#rgb";
     if value == EXPECT { Ok(Default::default()) } else { Err(format!("Expected {}", EXPECT)) }
 }}
 
