@@ -3,10 +3,11 @@ use std::sync::Arc;
 use activitypub_federation::{axum::{inbox::{ActivityData, receive_activity}, json::FederationJson}, config::Data, fetch::webfinger::{Webfinger, build_webfinger_response, extract_webfinger_name}, protocol::context::WithContext, traits::Object};
 use axum::{Json, debug_handler, extract::{Path, Query}, http::HeaderMap, response::{IntoResponse, Redirect, Response}};
 use log::error;
+use regex::Regex;
 use reqwest::{StatusCode, header::ACCEPT};
 use serde::Deserialize;
 
-use crate::{AppState, Error, default_context, get_self_alias, types::{activities::{count_followers, count_outbox_for, get_followers_from, get_outbound, get_outbox_for}, collections::LocalUserOwnedCollection, objects::{article::DbLocalArticle, person::{DbUser, PersonAcceptedActivities}}, utils::StableValue}, with_slash};
+use crate::{AppState, Error, default_context, get_self_alias, types::{activities::{count_followers, count_outbox_for, get_followers_from, get_outbound, get_outbox_for}, collections::LocalUserOwnedCollection, objects::{article::{DbLocalArticle, MutArticleView}, person::{DbUser, PersonAcceptedActivities}}, utils::StableValue}, with_slash};
 
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
@@ -60,12 +61,21 @@ pub(crate) async fn http_get_article(
         with_slash(&get_self_alias(&data)?)?.join("objects/")?.join(&path)?,
         &data
     ).await?;
+
     match db_local_article {
         None => Err(Error::Status(StatusCode::NOT_FOUND)),
-        Some(local_article) => {
+        Some(mut local_article) => {
             if should_serve_html(headers) {
                 return Ok(Redirect::to(local_article.url.as_str()).into_response());
             }
+
+            let view = MutArticleView::new(&mut local_article);
+
+            let spaces = Regex::new("\\s+")?;
+            for tag in view.tags {
+                *tag = spaces.replace_all(tag.trim(), "").into_owned();
+            }
+
             let json_local_article = local_article.into_json(&data).await?;
             Ok(FederationJson(WithContext::new(json_local_article, default_context().into())).into_response())
         }

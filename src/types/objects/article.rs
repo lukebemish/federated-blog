@@ -191,13 +191,7 @@ impl Object for DbLocalArticle {
     }
 
     async fn into_json(self, _data: &Data<Self::DataType>) -> Result<Self::Kind, Self::Error> {
-        let mut copy = self.clone();
-        let view = MutArticleView::new(&mut copy);
-
-        let spaces = Regex::new("\\s+")?;
-        for tag in view.tags {
-            *tag = spaces.replace_all(tag.trim(), "").into_owned();
-        }
+        let copy = self.clone();
 
         Ok(LocalArticle {
             kind: Default::default(),
