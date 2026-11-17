@@ -196,8 +196,7 @@ impl Object for DbLocalArticle {
 
         let spaces = Regex::new("\\s+")?;
         for tag in view.tags {
-            *tag = tag.trim().to_lowercase();
-            *tag = spaces.replace_all(tag, "").into_owned();
+            *tag = spaces.replace_all(tag.trim(), "").into_owned();
         }
 
         Ok(LocalArticle {

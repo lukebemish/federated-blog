@@ -141,7 +141,7 @@ pub(crate) async fn update_article(_state: &Arc<AppState>, atproto_state: &AtPro
             "$type": "org.wordpress.html",
             "html": content
         }).into()),
-        tags: Some(tags.into_iter().map(|s| s.to_owned().to_lowercase()).collect())
+        tags: Some(tags.into_iter().map(|s| s.trim().to_lowercase()).collect())
     };
 
     let client = reqwest_unsafe_client().await;
