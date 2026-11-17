@@ -155,7 +155,7 @@ impl DbLocalArticle {
 
         let spaces = Regex::new("\\s+")?;
         for tag in view.tags {
-            *tag = spaces.replace_all(tag.trim(), "").into_owned();
+            *tag = format!("#{}", spaces.replace_all(tag.trim(), ""));
         }
 
         self.into_json(data).await
