@@ -1,6 +1,7 @@
 use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 
 use activitypub_federation::{config::Data, fetch::object_id::ObjectId, kinds::object::ArticleType, protocol::verification::verify_domains_match, traits::Object};
+use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -103,41 +104,42 @@ pub(crate) struct DbLocalArticle {
 }
 
 impl DbLocalArticle {
-    pub(crate) async fn new_local(data: &Data<Arc<AppState>>, mut value: StableValue, ap_id: Url) -> Result<DbLocalArticle, Error> {
-        match &mut value {
-            StableValue::Object(map) => {
+    pub(crate) async fn new_local(data: &Data<Arc<AppState>>, value: StableValue, ap_id: Url) -> Result<DbLocalArticle, Error> {
+        let article = match value {
+            StableValue::Object(mut map) => {
                 map.insert("to".to_owned(), StableValue::Array(vec![
                     StableValue::String("https://www.w3.org/ns/activitystreams#Public".to_owned())
                 ]));
                 map.insert("cc".to_owned(), StableValue::Array(vec![
                     StableValue::String(get_local_endpoint(data, LocalEndpoint::Followers)?.to_string())
                 ]));
+
+                serde_json::from_value(StableValue::Object(map).into())?
             }
-            _ => {}
-        }
-        let value = value; // no more mut
+            _ => return Err(anyhow!("Not an object: {:?}", value).into())
+        };
 
         let existing = DbLocalArticle::read_from_id(ap_id.clone(), data).await?;
         match existing {
             None => {
-                let article = DbLocalArticle::from_json(serde_json::from_value(value.into())?, data).await?;
+                let article = DbLocalArticle::from_json(article, data).await?;
                 Outbound::create_article(
                     data,
                     &article.attributed_to,
-                    article.clone().into_json(data).await?
+                    article.clone().display_json(data).await?
                 ).await?;
                 log::info!("Indexed creation of {ap_id}");
                 Ok(article)
             },
             Some(old) => {
                 let old_json = DbLocalArticle::into_json(old.clone(), data).await?;
-                let new_json: LocalArticle = serde_json::from_value(value.into())?;
+                let new_json: LocalArticle = article;
                 if old_json != new_json {
                     let article = DbLocalArticle::from_json(new_json, data).await?;
                     Outbound::modify_article(
                         data,
                         &article.attributed_to,
-                        article.clone().into_json(data).await?
+                        article.clone().display_json(data).await?
                     ).await?;
                     log::info!("Indexed modification of {ap_id}");
                     Ok(article)
@@ -146,6 +148,17 @@ impl DbLocalArticle {
                 }
             }
         }
+    }
+
+    pub(crate) async fn display_json(mut self, data: &Data<Arc<AppState>>) -> Result<LocalArticle, Error> {
+        let view = MutArticleView::new(&mut self);
+
+        let spaces = Regex::new("\\s+")?;
+        for tag in view.tags {
+            *tag = spaces.replace_all(tag.trim(), "").into_owned();
+        }
+
+        self.into_json(data).await
     }
 }
 
