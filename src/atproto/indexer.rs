@@ -13,7 +13,7 @@ use sqlx::Row;
 use tokio::sync::OnceCell;
 use xxhash_rust::xxh32::xxh32;
 
-use crate::{ActivityPubIcon, AppState, AtProtoAppState, Error, atproto::lexicon::{self, Blob, SiteStandardDocument, SiteStandardDocumentType, SiteStandardPublication}, html, reqwest_unsafe_client, types::{objects::article::DbLocalArticle, utils::StableValue}, with_slash};
+use crate::{ActivityPubIcon, AppState, AtProtoAppState, Error, atproto::lexicon::{self, Blob, SiteStandardDocument, SiteStandardDocumentType, SiteStandardPublication}, html, reqwest_unsafe_client, types::{objects::article::{ArticleView, DbLocalArticle}, utils::StableValue}, with_slash};
 
 static SESSION_AUTH: OnceCell<Arc<Mutex<AppPasswordSession>>> = OnceCell::const_new();
 
@@ -100,15 +100,9 @@ pub(crate) fn calculate_tid(date: &DateTime<Utc>, id_path: &String) -> String {
 }
 
 pub(crate) async fn update_article(_state: &Arc<AppState>, atproto_state: &AtProtoAppState, auth: &Auth, id_path: &String, article: &DbLocalArticle, publication_rkey: &String) -> Result<(), Error> {
-    let published = match article.extra.get("published").and_then(|s| {
-        let o = match s {
-            StableValue::String(s) => DateTime::parse_from_rfc3339(s).ok().map(|d| d.to_utc()),
-            _ => None,
-        };
-        if o.is_none() {
-            log::warn!("Article {} has a 'published' date but it does not seem to be a valid date-time: {:?}", id_path, s);
-        }
-        o
+    let view = ArticleView::new(article);
+    let published = match view.published.and_then(|s| {
+        DateTime::parse_from_rfc3339(s).ok().map(|d| d.to_utc())
     }) {
         None => {
             log::warn!("Cannot federated article {} without valid published date to AT Protocol; impossible to calculate a stable TID rkey", id_path);
@@ -116,42 +110,22 @@ pub(crate) async fn update_article(_state: &Arc<AppState>, atproto_state: &AtPro
         },
         Some(d) => d
     };
-    let content = match article.extra.get("content").and_then(|c| match c {
-        StableValue::String(s) => Some(s),
-        _ => None
-    }) {
+    let content = match view.content {
         None => {
             log::warn!("Cannot federated article {} without string content", id_path);
             return Ok(());
         },
         Some(c) => c
     };
-    let summary = match article.extra.get("summary").and_then(|c| match c {
-        StableValue::String(s) => Some(s),
-        _ => None
-    }) {
+
+    let summary = match view.summary {
         None => None,
         Some(html) => Some(html::strip_tags(html)?)
     };
 
     let text_content = html::strip_tags(&content)?;
 
-    let tags: Option<Vec<String>> = article.extra.get("tag").and_then(|v| match v {
-        StableValue::Array(tags) => Some(tags.iter().flat_map(|t| match t {
-            StableValue::Object(t) => match (t.get("type"), t.get("name")) {
-                (Some(StableValue::String(s)), Some(StableValue::String(tag))) if s == "Hashtag" => {
-                    if tag.starts_with("#") {
-                        Some(tag[1..].to_owned())
-                    } else {
-                        None
-                    }
-                },
-                _ => None
-            }.into_iter(),
-            _ => None.into_iter()
-        }).collect()),
-        _ => None
-    });
+    let tags = view.tags;
 
     let tid = calculate_tid(&published, id_path);
     let document = SiteStandardDocument {
@@ -165,9 +139,9 @@ pub(crate) async fn update_article(_state: &Arc<AppState>, atproto_state: &AtPro
         title: article.name.clone(),
         content: Some(json!({
             "$type": "org.wordpress.html",
-            "html": content.clone()
+            "html": content
         }).into()),
-        tags: tags
+        tags: Some(tags.into_iter().map(|s| s.to_owned().to_lowercase()).collect())
     };
 
     let client = reqwest_unsafe_client().await;

@@ -1,12 +1,95 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 
 use activitypub_federation::{config::Data, fetch::object_id::ObjectId, kinds::object::ArticleType, protocol::verification::verify_domains_match, traits::Object};
 use chrono::{DateTime, Utc};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use url::Url;
 
 use crate::{AppState, Error, get_self_alias, types::{activities::Outbound, objects::person::{DbUser, LocalEndpoint, get_local_endpoint}, utils::{DummyContext, StableValue}}};
+
+pub(crate) struct ArticleView<'a> {
+    pub(crate) published: Option<& 'a str>,
+    pub(crate) content: Option<& 'a str>,
+    pub(crate) summary: Option<& 'a str>,
+    pub(crate) tags: Vec<& 'a str>,
+    _phantom: PhantomData<()>
+}
+
+impl <'a> ArticleView<'a> {
+    pub(crate) fn new(article: & 'a DbLocalArticle) -> ArticleView<'a> {
+        ArticleView {
+            _phantom: PhantomData,
+            published: match article.extra.get("published") {
+                Some(StableValue::String(a)) => Some(a),
+                _ => None
+            },
+            content: match article.extra.get("content") {
+                Some(StableValue::String(a)) => Some(a),
+                _ => None
+            },
+            summary: match article.extra.get("summary") {
+                Some(StableValue::String(a)) => Some(a),
+                _ => None
+            },
+            tags: match article.extra.get("tag") {
+                Some(StableValue::Array(objs)) => objs.iter()
+                    .filter_map(|obj| match obj {
+                        StableValue::Object(obj)
+                            if let Some(StableValue::String(kind)) = obj.get("type") && kind == "Hashtag"
+                            && let Some(StableValue::String(tag)) = obj.get("name") => Some(tag.as_str()),
+                        _ => None
+                    }).collect(),
+                _ => vec![]
+            }
+        }
+    }
+}
+
+pub(crate) struct MutArticleView<'a> {
+    pub(crate) published: Option<& 'a mut String>,
+    pub(crate) content: Option<& 'a mut String>,
+    pub(crate) summary: Option<& 'a mut String>,
+    pub(crate) tags: Vec<& 'a mut String>,
+    _phantom: PhantomData<()>
+}
+
+impl <'a> MutArticleView<'a> {
+    pub(crate) fn new(article: & 'a mut DbLocalArticle) -> MutArticleView<'a> {
+        let [published, content, summary, tags] = unsafe {
+            article.extra.get_disjoint_unchecked_mut(["published", "content", "summary", "tag"])
+        };
+        MutArticleView {
+            _phantom: PhantomData,
+            published: match published {
+                Some(StableValue::String(a)) => Some(a),
+                _ => None
+            },
+            content: match content {
+                Some(StableValue::String(a)) => Some(a),
+                _ => None
+            },
+            summary: match summary {
+                Some(StableValue::String(a)) => Some(a),
+                _ => None
+            },
+            tags: match tags {
+                Some(StableValue::Array(objs)) => objs.iter_mut()
+                    .filter_map(|obj| match obj {
+                        StableValue::Object(obj)
+                            if let Some(StableValue::String(kind)) = obj.get("type")
+                            && kind == "Hashtag" => match obj.get_mut("name") {
+                                Some(StableValue::String(tag)) => Some(tag),
+                                _ => None
+                            },
+                        _ => None
+                    }).collect(),
+                _ => vec![]
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct DbLocalArticle {
@@ -108,16 +191,25 @@ impl Object for DbLocalArticle {
     }
 
     async fn into_json(self, _data: &Data<Self::DataType>) -> Result<Self::Kind, Self::Error> {
+        let mut copy = self.clone();
+        let view = MutArticleView::new(&mut copy);
+
+        let spaces = Regex::new("\\s+")?;
+        for tag in view.tags {
+            *tag = tag.trim().to_lowercase();
+            *tag = spaces.replace_all(tag, "").into_owned();
+        }
+
         Ok(LocalArticle {
             kind: Default::default(),
-            name: self.name.clone(),
-            id: self.ap_id.clone(),
-            attributed_to: self.attributed_to.clone(),
-            url: self.url.clone(),
-            to: self.to.clone(),
-            cc: self.cc.clone(),
+            name: copy.name,
+            id: copy.ap_id,
+            attributed_to: copy.attributed_to,
+            url: copy.url,
+            to: copy.to,
+            cc: copy.cc,
             _context: DummyContext,
-            extra: self.extra.clone()
+            extra: copy.extra
         })
     }
 
